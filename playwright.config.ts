@@ -7,7 +7,18 @@ const API_URL = process.env.API_URL || 'http://localhost:8100';
 const WEB_URL = process.env.WEB_URL || 'http://localhost:5173';
 
 export default defineConfig({
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: [
+    ['list'],
+    ['html', { open: 'never' }],
+    [
+      './tests/a11y/reporter.ts',
+      {
+        outputFolder: 'a11y-report',
+        baseline: 'a11y-baseline.json',
+        title: 'Fernly accessibility',
+      },
+    ],
+  ],
   webServer: [
     {
       command: 'npm run start:api',

@@ -48,7 +48,11 @@ function targetMatches(baselineTarget: string, elementTarget: string): boolean {
   return baselineTarget === '*' || baselineTarget === elementTarget;
 }
 
-function findBaseline(
+export function getBaselineEntries(): BaselineEntry[] {
+  return baseline;
+}
+
+export function findBaseline(
   rule: string,
   page: string,
   elementTarget: string,
@@ -58,6 +62,21 @@ function findBaseline(
       entry.rule === rule &&
       entry.page === page &&
       targetMatches(entry.target, elementTarget),
+  );
+}
+
+/** Baseline rows that no scanned element matched — safe to delete. */
+export function unusedBaselineEntries(
+  classified: ReadonlyArray<Pick<ClassifiedViolation, 'rule' | 'page' | 'target'>>,
+): BaselineEntry[] {
+  return baseline.filter(
+    (entry) =>
+      !classified.some(
+        (item) =>
+          item.rule === entry.rule &&
+          item.page === entry.page &&
+          targetMatches(entry.target, item.target),
+      ),
   );
 }
 
