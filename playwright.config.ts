@@ -39,5 +39,11 @@ export default defineConfig({
       use: { baseURL: WEB_URL },
       dependencies: ['setup'],
     },
+    {
+      name: 'a11y',
+      testDir: 'tests/a11y',
+      use: { baseURL: WEB_URL },
+      dependencies: ['setup'],
+    },
   ],
 });
