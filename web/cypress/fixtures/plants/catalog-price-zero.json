@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "id": "pl-free",
+      "name": "Free Seedling",
+      "latinName": "Seedling gratis",
+      "price": 0,
+      "light": "low",
+      "careLevel": 1,
+      "petSafe": true,
+      "stock": 5,
+      "rating": 4.0,
+      "imageUrl": "/plants/succulent.svg"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 12
+}
