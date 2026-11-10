@@ -1,0 +1,70 @@
+---
+description: Page objects for Fernly's Playwright end-to-end and visual tests — locators and actions live in tests/pages, specs only describe and assert.
+globs: tests/e2e/**, tests/visual/**, tests/pages/**
+alwaysApply: false
+---
+
+# Page objects
+
+## 1. Where locators live
+
+Locators and actions belong in `tests/pages`. Specs import page objects and only describe the flow and assert.
+
+```ts
+// ✅ GOOD — tests/pages/BrowsePage.ts + tests/e2e/browse.spec.ts
+this.sortBy = page.getByLabel('Sort by');
+await browse.sortPriceHighToLow();
+await expect(browse.firstPlantHeading).toHaveText(/* … */);
+
+// ❌ BAD — locator built in the spec
+await page.getByLabel('Sort by').selectOption({ label: 'Price: high to low' });
+```
+
+## 2. Locator order
+
+Prefer `getByRole`, then `getByLabel`, then `getByText`. Never CSS or XPath. An control with no accessible name (F-07 heart) is found by role inside its card, with a comment that names the finding.
+
+```ts
+// ✅ GOOD — tests/pages/BrowsePage.ts
+// F-07: Save (heart) button has no accessible name — find by role inside its card.
+return this.plantCard(plantName).getByRole('button');
+
+// ❌ BAD
+page.locator('.save');
+page.locator('//button[contains(@class,"save")]');
+```
+
+## 3. Actions return nothing or the next page object
+
+Async actions perform a user step and return `void` or the page that follows. They never assert.
+
+```ts
+// ✅ GOOD — tests/pages/CartPage.ts / RegisterPage.ts
+async goToCheckout(): Promise<CheckoutPage> {
+  await this.goToCheckoutLink.click();
+  return new CheckoutPage(this.page);
+}
+async createAccount(/* … */): Promise<BrowsePage> { /* fill, click, return new BrowsePage */ }
+
+// ❌ BAD — assert inside the page object / return a boolean snapshot
+async goToCheckout(): Promise<void> {
+  await this.goToCheckoutLink.click();
+  await expect(this.page.getByRole('heading', { name: 'Checkout' })).toBeVisible();
+}
+```
+
+## 4. Assertions stay in the spec
+
+Every `expect` lives in `tests/e2e` (or visual specs). Page objects expose locators; specs keep the same assertions.
+
+```ts
+// ✅ GOOD — tests/e2e/plant-reviews.spec.ts
+await expect(plant.thanksToast).toBeVisible();
+await expect(plant.reviewsRegion).toContainText(reviewText);
+
+// ❌ BAD — expectation hidden in PlantPage
+async postReviewAndExpectThanks(): Promise<void> {
+  await this.postReviewButton.click();
+  await expect(this.thanksToast).toBeVisible();
+}
+```
