@@ -8,6 +8,7 @@ export class BrowsePage {
   readonly firstPlantHeading: Locator;
   readonly signOutButton: Locator;
   readonly cartLink: Locator;
+  readonly nextPageButton: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -20,6 +21,9 @@ export class BrowsePage {
       .getByRole('heading', { level: 3 });
     this.signOutButton = page.getByRole('button', { name: 'Sign out' });
     this.cartLink = page.getByRole('link', { name: /Cart/i });
+    this.nextPageButton = page.getByRole('navigation', { name: 'Pages' }).getByRole('button', {
+      name: 'Next',
+    });
   }
 
   /** Opens the browse (shop) page. @returns void */
@@ -33,6 +37,11 @@ export class BrowsePage {
    */
   async sortPriceHighToLow(): Promise<void> {
     await this.sortBy.selectOption({ label: 'Price: high to low' });
+  }
+
+  /** Opens the next page of plant results. @returns void */
+  async goToNextPage(): Promise<void> {
+    await this.nextPageButton.click();
   }
 
   /**

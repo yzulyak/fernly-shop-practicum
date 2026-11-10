@@ -1,4 +1,4 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -6,7 +6,18 @@ dotenv.config();
 const API_URL = process.env.API_URL || 'http://localhost:8100';
 const WEB_URL = process.env.WEB_URL || 'http://localhost:5173';
 
+const includeVisual = Boolean(process.env.CI || process.env.VISUAL);
+
 export default defineConfig({
+  expect: {
+    toHaveScreenshot: {
+      // No pixel tolerance — a tolerance can hide a small defect.
+      animations: 'disabled',
+      maxDiffPixels: 0,
+      maxDiffPixelRatio: 0,
+      threshold: 0,
+    },
+  },
   reporter: [
     ['list'],
     ['html', { open: 'never' }],
@@ -56,5 +67,19 @@ export default defineConfig({
       use: { baseURL: WEB_URL },
       dependencies: ['setup'],
     },
+    ...(includeVisual
+      ? [
+          {
+            name: 'visual',
+            testDir: 'tests/visual',
+            use: {
+              baseURL: WEB_URL,
+              ...devices['Desktop Chrome'],
+              viewport: { width: 1280, height: 800 },
+            },
+            dependencies: ['setup'],
+          },
+        ]
+      : []),
   ],
 });
