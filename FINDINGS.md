@@ -35,6 +35,42 @@ Findings are ordered by severity: money and privacy first, then broken flows, th
 - **Contradicts:** docs/PRODUCT.md — "Every price is shown in dollars with **two decimals**, everywhere: `$12.50`, never `$12.5`."
 - **Suggested fix (optional):** Pad `formatPrice` to always two decimal places (e.g. `toFixed(2)`).
 
+### F-03: Any signed-in customer can delete another customer’s review
+
+- **Where:** `DELETE /api/reviews/{reviewId}`
+- **Category:** Authorization
+- **Impact:** A shopper can erase someone else’s plant review; ownership is not enforced.
+- **Evidence:** tests/api/plant-reviews.spec.ts — other signed-in customer cannot delete a review → 404 (executed; received 204 and review removed)
+- **Contradicts:** docs/features/plant-reviews.md — “Only the author can delete a review. Anyone else gets Review not found.”
+- **Suggested fix (optional):** Return 404 unless the bearer token’s user owns the review.
+
+### F-04: Review average for 5, 4, 5 is 4.6 instead of 4.7
+
+- **Where:** `GET /api/plants/{plantId}/reviews` `average`
+- **Category:** Business rules in the API
+- **Impact:** Shoppers see a lower average than the documented half-up rounding (4.666… → 4.7).
+- **Evidence:** tests/api/plant-reviews.spec.ts — average for ratings 5, 4, 5 → 4.7 (one decimal, halves up) (executed; received 4.6)
+- **Contradicts:** docs/features/plant-reviews.md — “The average is rounded to one decimal, halves up… show as **4.7**.”; OpenAPI ReviewList average description
+- **Suggested fix (optional):** Round half away from zero to one decimal (e.g. multiply by 10, round, divide).
+
+### F-05: Posted review does not appear in the list until a full reload
+
+- **Where:** Plant page Reviews slot (`ReviewsSlot` invalidateQueries key)
+- **Category:** Pages
+- **Impact:** After posting, the customer sees the thank-you toast but the list/average stay stale.
+- **Evidence:** web/cypress/ui/plant-reviews.cy.ts — 7 positive: list shows average/count/newest-first; POST thanks and refreshes (executed); tests/e2e/plant-reviews.spec.ts — sign in, post a valid review, see toast and updated list (executed). Invalidate uses `['review', plant.id]` while the query key is `['reviews', plant.id]`.
+- **Contradicts:** docs/features/plant-reviews.md — “appears in the list right away, and the page thanks the customer.”
+- **Suggested fix (optional):** Invalidate `['reviews', plant.id]` (match the query key).
+
+### F-06: Star rating is not a keyboard-operable radio group
+
+- **Where:** `StarRatingInput` on Write a review
+- **Category:** Accessibility
+- **Impact:** Keyboard and screen-reader users cannot change or hear which star is selected as documented.
+- **Evidence:** web/cypress/component/ReviewForm.cy.tsx — 9 accessibility: radiogroup Your rating; Tab; arrows; selected announced (executed); tests/a11y/pages.spec.ts — Plant Reviews (signed-in) form radiogroup is named and operable (executed; no `aria-checked` after ArrowRight)
+- **Contradicts:** docs/features/plant-reviews.md — “The star rating works with the keyboard like any group of radio buttons… a screen reader announces which star is selected.”
+- **Suggested fix (optional):** Implement radiogroup semantics with `aria-checked`, roving tabindex, and arrow-key selection.
+
 ## Suspicions — not yet tested
 
 Each line is something that looks different from `docs/PRODUCT.md` or the API contract, followed by the line it may contradict. "Seen" means it showed up once during the mapping walk; "Code" means it comes only from reading the source.

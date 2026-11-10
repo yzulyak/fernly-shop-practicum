@@ -55,6 +55,45 @@ test('Plant has no blocking a11y violations', { tag: '@a11y' }, async ({ page },
   expect(blocking, formatBlockingMessage(blocking)).toEqual([]);
 });
 
+test('Plant Reviews (signed-out) keeps Reviews landmark and heading', { tag: '@a11y' }, async ({
+  page,
+}, testInfo) => {
+  await page.goto('/plants/pl-monstera');
+  await expect(page.getByRole('heading', { level: 2, name: 'Reviews' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Reviews' })).toBeVisible();
+
+  const { blocking } = await scanPage(page, testInfo, { name: 'Plant Reviews signed-out' });
+  expect(blocking, formatBlockingMessage(blocking)).toEqual([]);
+});
+
+test('Plant Reviews (signed-in) form radiogroup is named and operable', { tag: '@a11y' }, async ({
+  page,
+}, testInfo) => {
+  const email = `a11y-reviewer-${Date.now()}@fernly.test`;
+  await page.goto('/register');
+  await page.getByLabel('Name').fill('A11y Reviewer');
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill('Fernly-Test-2026');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+
+  await page.goto('/plants/pl-zz');
+  await expect(page.getByRole('heading', { level: 2, name: 'Reviews' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Reviews' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 3, name: 'Write a review' })).toBeVisible();
+
+  const ratingGroup = page.getByRole('radiogroup', { name: 'Your rating' });
+  await expect(ratingGroup).toBeVisible();
+  await ratingGroup.focus();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  const checked = ratingGroup.getByRole('radio', { checked: true });
+  await expect(checked).toBeVisible();
+
+  const { blocking } = await scanPage(page, testInfo, { name: 'Plant Reviews signed-in' });
+  expect(blocking, formatBlockingMessage(blocking)).toEqual([]);
+});
+
 test('Sign in has no blocking a11y violations', { tag: '@a11y' }, async ({ page }, testInfo) => {
   await page.goto('/login');
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();

@@ -1,0 +1,21 @@
+{
+  "plantId": "pl-monstera",
+  "average": 4.5,
+  "count": 2,
+  "reviews": [
+    {
+      "id": "rv-newer",
+      "author": "Leo M.",
+      "rating": 4,
+      "text": "Beautiful, but it needed a bigger pot quickly.",
+      "createdAt": "2026-09-11T12:00:00.000Z"
+    },
+    {
+      "id": "rv-older",
+      "author": "Priya S.",
+      "rating": 5,
+      "text": "Two new leaves in the first month!",
+      "createdAt": "2026-08-21T09:00:00.000Z"
+    }
+  ]
+}
