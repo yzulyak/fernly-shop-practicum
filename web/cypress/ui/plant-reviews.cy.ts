@@ -78,7 +78,7 @@ describe('Plant page Reviews slot', () => {
     cy.findByText(/4\.5 out of 5/).should('be.visible');
   });
 
-  it('7 positive: list shows average/count/newest-first; POST thanks and refreshes', { tags: '@ui' }, () => {
+  it('7 positive: list shows average/count/newest-first; POST thanks and refreshes', { tags: ['@ui', '@known-bug'] }, () => {
     stubSignedInApis();
     stubPlantPageBasics();
 

@@ -40,6 +40,7 @@ async function addOnePlantToCart(page: Page): Promise<void> {
 }
 
 test('Browse has no blocking a11y violations', { tag: '@a11y' }, async ({ page }, testInfo) => {
+  test.fail(true, 'F-07: save buttons unnamed; F-08: PriceTag contrast fails');
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
@@ -48,6 +49,7 @@ test('Browse has no blocking a11y violations', { tag: '@a11y' }, async ({ page }
 });
 
 test('Plant has no blocking a11y violations', { tag: '@a11y' }, async ({ page }, testInfo) => {
+  test.fail(true, 'F-08: PriceTag contrast fails; F-09: plant hero image has no alt');
   await page.goto('/plants/pl-monstera');
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
@@ -58,6 +60,7 @@ test('Plant has no blocking a11y violations', { tag: '@a11y' }, async ({ page },
 test('Plant Reviews (signed-out) keeps Reviews landmark and heading', { tag: '@a11y' }, async ({
   page,
 }, testInfo) => {
+  test.fail(true, 'F-08/F-09: plant page PriceTag contrast and hero image alt (pre-existing)');
   await page.goto('/plants/pl-monstera');
   await expect(page.getByRole('heading', { level: 2, name: 'Reviews' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Reviews' })).toBeVisible();
@@ -69,6 +72,7 @@ test('Plant Reviews (signed-out) keeps Reviews landmark and heading', { tag: '@a
 test('Plant Reviews (signed-in) form radiogroup is named and operable', { tag: '@a11y' }, async ({
   page,
 }, testInfo) => {
+  test.fail(true, 'F-06: star rating is not a keyboard-operable radio group');
   const email = `a11y-reviewer-${Date.now()}@fernly.test`;
   await page.goto('/register');
   await page.getByLabel('Name').fill('A11y Reviewer');
@@ -103,6 +107,7 @@ test('Sign in has no blocking a11y violations', { tag: '@a11y' }, async ({ page 
 });
 
 test('Cart has no blocking a11y violations', { tag: '@a11y' }, async ({ page }, testInfo) => {
+  test.fail(true, 'F-10: promo code field has no accessible name or visible label');
   await signInAsFirstCustomer(page);
   await addOnePlantToCart(page);
   await page.goto('/cart');
@@ -113,6 +118,7 @@ test('Cart has no blocking a11y violations', { tag: '@a11y' }, async ({ page }, 
 });
 
 test('Checkout has no blocking a11y violations', { tag: '@a11y' }, async ({ page }, testInfo) => {
+  test.fail(true, 'F-08: PriceTag contrast fails on checkout summary');
   await signInAsFirstCustomer(page);
   await addOnePlantToCart(page);
   await page.goto('/checkout');

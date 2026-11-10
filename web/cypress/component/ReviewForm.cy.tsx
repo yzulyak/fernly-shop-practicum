@@ -45,7 +45,7 @@ describe('ReviewForm + StarRatingInput', () => {
     cy.findByLabelText('Your review').should('have.attr', 'maxLength', '500');
   });
 
-  it('9 accessibility: radiogroup Your rating; Tab; arrows; selected announced', { tags: '@component' }, () => {
+  it('9 accessibility: radiogroup Your rating; Tab; arrows; selected announced', { tags: ['@component', '@known-bug'] }, () => {
     cy.mount(<ReviewForm onSubmit={cy.spy()} />);
 
     cy.findByRole('radiogroup', { name: 'Your rating' }).should('be.visible');

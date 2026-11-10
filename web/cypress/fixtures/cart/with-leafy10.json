@@ -1,0 +1,21 @@
+{
+  "lines": [
+    {
+      "id": "ln-promo-1",
+      "plantId": "pl-monstera",
+      "name": "Monstera Deliciosa",
+      "size": "S",
+      "unitPrice": 34.99,
+      "quantity": 1,
+      "lineTotal": 34.99,
+      "stock": 12,
+      "imageUrl": "/plants/monstera.svg"
+    }
+  ],
+  "itemCount": 1,
+  "subtotal": 34.99,
+  "discount": 3.5,
+  "promoCode": "LEAFY10",
+  "shipping": 6.95,
+  "total": 38.44
+}

@@ -71,21 +71,114 @@ Findings are ordered by severity: money and privacy first, then broken flows, th
 - **Contradicts:** docs/features/plant-reviews.md — “The star rating works with the keyboard like any group of radio buttons… a screen reader announces which star is selected.”
 - **Suggested fix (optional):** Implement radiogroup semantics with `aria-checked`, roving tabindex, and arrow-key selection.
 
+### F-07: Save (heart) button on plant cards has no accessible name
+
+- **Where:** Browse plant cards (`PlantCard` save button)
+- **Category:** Accessibility
+- **Impact:** Screen-reader users cannot tell what the heart control does.
+- **Evidence:** tests/a11y/pages.spec.ts — Browse has no blocking a11y violations (executed; axe `button-name` on every save button); hand check: `aria-label` null, only `aria-hidden` SVG
+- **Contradicts:** docs/PRODUCT.md — “every button and form field has a name a screen reader can announce.”
+- **Suggested fix (optional):** Add `aria-label` such as “Save Monstera Deliciosa” (and “Unsave…” when saved).
+
+### F-08: PriceTag text fails contrast (about 2.3:1)
+
+- **Where:** `PriceTag` (Browse, Plant, Checkout, and any page that shows prices)
+- **Category:** Accessibility
+- **Impact:** Shoppers with low vision may not read prices against the white background.
+- **Evidence:** tests/a11y/pages.spec.ts — Browse / Plant / Plant Reviews (signed-out) / Checkout axe `color-contrast` on `.PriceTag-module__price` (executed)
+- **Contradicts:** docs/PRODUCT.md — “text has enough contrast against its background (4.5:1 for normal text).”
+- **Suggested fix (optional):** Darken the price color to meet 4.5:1 on white.
+
+### F-09: Plant page hero image has no alternative text
+
+- **Where:** Plant page large image
+- **Category:** Accessibility
+- **Impact:** Screen-reader users miss the plant photo entirely.
+- **Evidence:** tests/a11y/pages.spec.ts — Plant / Plant Reviews (signed-out) axe `image-alt` (executed); hand check: `alt` is null on `/plants/pl-monstera`
+- **Contradicts:** docs/PRODUCT.md — “every meaningful image has alternative text.”
+- **Suggested fix (optional):** Set `alt` to the plant name (or empty `alt` only if decorative — it is not).
+
+### F-10: Promo code field has no accessible name or visible label
+
+- **Where:** `PromoCodeInput` on Cart
+- **Category:** Accessibility
+- **Impact:** Screen-reader users cannot identify the promo code field; sighted users see only a title paragraph, not a label for the input.
+- **Evidence:** tests/a11y/pages.spec.ts — Cart has no blocking a11y violations (executed; axe `label`); web/cypress/component/PromoCodeInput.cy.tsx — 7f accessibility: code field has a visible accessible name (executed); tests/e2e/promo-codes.spec.ts — cart promo code field has a visible accessible name (executed)
+- **Contradicts:** docs/features/promo-codes.md — “The code field has a visible label.”; docs/PRODUCT.md — “every button and form field has a name a screen reader can announce.”
+- **Suggested fix (optional):** Associate a visible `<label>` (e.g. “Promo code”) with the input.
+
+### F-11: Quantity `+` stays enabled at the stock limit
+
+- **Where:** `QuantityStepper` (plant page and cart line)
+- **Category:** Components
+- **Impact:** A customer can click + at max stock; the control should stop them at the stock left.
+- **Evidence:** web/cypress/component/QuantityStepper.cy.tsx — disables + at the stock limit (executed; button stays enabled when `value === max`); shop check on String of Pearls (stock 1): + enabled at quantity 1
+- **Contradicts:** docs/PRODUCT.md — “at the stock limit, the + button is disabled.”
+- **Suggested fix (optional):** Disable when `value >= max` (not `value > max`).
+
+### F-12: Single-plant `rating` is a string, not a number
+
+- **Where:** `GET /api/plants/{plantId}`
+- **Category:** The contract
+- **Impact:** Clients that expect a numeric rating can break or coerce wrongly.
+- **Evidence:** tests/api/plants.spec.ts — a plant matches the Plant schema (executed; `/rating: must be number`); hand check: `"rating": "4.7"`
+- **Contradicts:** OpenAPI `Plant` / `PlantSummary.rating` — `type: number`
+- **Suggested fix (optional):** Serialize `rating` as a JSON number on the detail endpoint.
+
+### F-13: `price-desc` sorts cheapest first
+
+- **Where:** `GET /api/plants?sort=price-desc`; Browse “Price: high to low”
+- **Category:** Business rules in the API
+- **Impact:** Shoppers asking for most expensive first see the cheapest plant first ($0.99 Succulent Cutting).
+- **Evidence:** tests/api/plants.spec.ts — price-desc returns the most expensive plant first (executed); tests/e2e/browse.spec.ts — choosing Price: high to low… (executed); hand check: first item `$0.99`
+- **Contradicts:** docs/PRODUCT.md — “Price: high to low (most expensive first)”; contract: “price-desc (highest first)”
+- **Suggested fix (optional):** Sort by price descending for `price-desc`.
+
+### F-14: Percent promo discounts plants + shipping
+
+- **Where:** `POST /api/cart/promo` with `LEAFY10`
+- **Category:** Business rules in the API
+- **Impact:** Customer is charged the wrong total — 10% is taken off shipping as well as plants.
+- **Evidence:** tests/api/promo-codes.spec.ts — LEAFY10 on a non-empty cart → 10% of plant subtotal only (executed; Monstera $34.99 + ship $6.95 → discount `$4.19` instead of `$3.50`); tests/e2e/promo-codes.spec.ts — cart apply leafy10… (executed)
+- **Contradicts:** docs/features/promo-codes.md — “A percentage code takes that percentage off the subtotal of the plants — never off shipping.”; CartSchema discount description
+- **Suggested fix (optional):** Compute percent discount from `subtotal` only, not `subtotal + shipping`.
+
+### F-15: Expired `SPRING5` is accepted
+
+- **Where:** `POST /api/cart/promo` with `SPRING5`
+- **Category:** Business rules in the API
+- **Impact:** An expired code still reduces the cart; shoppers and the shop disagree on what “expired” means.
+- **Evidence:** tests/api/promo-codes.spec.ts — SPRING5 expired → refused with expired message (executed; 200 with `promoCode: "SPRING5"`); tests/e2e/promo-codes.spec.ts — cart: expired SPRING5… (executed)
+- **Contradicts:** docs/features/promo-codes.md — “Expired codes are refused, with a message that says the code has expired.”; table: SPRING5 valid until 30 Apr 2026
+- **Suggested fix (optional):** Reject when today is after `expiresAt`, with an expired message and `promo_invalid`.
+
+### F-16: Any signed-in customer can read another customer’s order
+
+- **Where:** `GET /api/orders/{orderId}`
+- **Category:** Authorization
+- **Impact:** Order details (address, totals, promo) leak across accounts.
+- **Evidence:** tests/api/promo-codes.spec.ts — other signed-in customer cannot GET an order → 404 (executed; received 200 with full order); hand check with two tokens
+- **Contradicts:** docs/PRODUCT.md — “An order is private: only the customer who placed it can see it. Anyone else gets Order not found.”
+- **Suggested fix (optional):** Return 404 unless the bearer token’s user owns the order.
+
+### F-17: Refused promo message is not announced to assistive tech
+
+- **Where:** `PromoCodeInput` error text
+- **Category:** Accessibility
+- **Impact:** Screen-reader users may miss that a code was refused.
+- **Evidence:** web/cypress/component/PromoCodeInput.cy.tsx — 7g accessibility: refused-code message is announced to AT (executed; no `role="alert"` / live region)
+- **Contradicts:** docs/features/promo-codes.md — “When a code is refused, the message is announced to screen-reader users as soon as it appears.”
+- **Suggested fix (optional):** Render the error in a `role="alert"` or `aria-live="assertive"` region.
+
 ## Suspicions — not yet tested
 
 Each line is something that looks different from `docs/PRODUCT.md` or the API contract, followed by the line it may contradict. "Seen" means it showed up once during the mapping walk; "Code" means it comes only from reading the source.
 
 - Prices render without two decimals for non-zero amounts (`$22`, `$27.5`, `$12.5`, "Add $37.5 more for free shipping"); `formatPrice` rounds but never pads (seen). Related to F-02. — "Every price is shown in dollars with **two decimals**, everywhere."
-- `GET /api/plants?sort=price-desc` returns the cheapest plant first ($0.99 Succulent Cutting), in the same order as `price-asc` (seen). — "Price: high to low (most expensive first)"; contract: "price-desc (highest first)".
 - Care level 3 plants (Fiddle Leaf Fig, Calathea, String of Pearls) show "●●● Moderate care"; `CareLevelBadge` caps the label index at 2 (seen). — "Care level has three steps: 1 Easy, 2 Moderate, 3 Expert."
-- On String of Pearls (stock 1) the + button is enabled at quantity 1; `QuantityStepper` disables only when `value > max`, and the cart line uses the same stepper (seen on the plant page). — "at the stock limit, the + button is disabled."
 - After clicking "Calathea Orbifolia" under "Likes the same light" on Monstera, the address bar shows `/plants/pl-calathea` but the page still shows Monstera Deliciosa; the plant query key `['plant']` has no plant id, so Add to cart would add the wrong plant (seen once). — "The plant page always shows the plant in the address bar, including after following a 'Likes the same light' link."
-- `GET /api/plants/{plantId}` returns `rating` as the string `"4.7"`, while the list endpoint returns a number (seen with curl). — Contract: `PlantSummary.rating` is `type: number`.
 - Cached single orders (query key `['order', id]`) and plant data aren't cleared at sign-out; only `cart` and `orders` are, so the next customer on the same device may see the previous customer's order from cache (code). — "An order is private: only the customer who placed it can see it." and "Signing out forgets the session on this device."
 - The search field has no accessible name: the snapshot shows an unnamed `searchbox`, and "Search plants" is a `<span>` hint, not a label (seen). — "every button and form field has a name a screen reader can announce."
-- The heart (save) button on every plant card has no accessible name; it holds only an `aria-hidden` SVG (seen: `aria-label` is null on all 12 cards). — "every button and form field has a name a screen reader can announce."
-- The large plant image on the plant page has no `alt` attribute (seen: `alt` is null). — "every meaningful image has alternative text."
-- Price text is `#8dbb8a` on white, about 2.3:1 contrast, used for every `PriceTag` (computed style seen; ratio calculated). — "text has enough contrast against its background (4.5:1 for normal text)."
 
 ## Questions — neither document answers
 

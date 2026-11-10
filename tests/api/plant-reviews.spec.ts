@@ -101,6 +101,7 @@ test('DELETE review without token → 401 auth_required', { tag: '@api' }, async
 test('other signed-in customer cannot delete a review → 404', { tag: '@api' }, async ({
   request,
 }) => {
+  test.fail(true, 'F-03: any signed-in customer can delete another customer’s review');
   const author = await register(request, 'Keep My Review');
   const other = await register(request, 'Other Customer');
   const created = await request.post('/api/plants/pl-boston-fern/reviews', {
@@ -264,7 +265,8 @@ test('text with surrounding spaces that trims to valid → 201', { tag: '@api' }
   request,
 }) => {
   const user = await register(request, 'Trim Valid');
-  const response = await request.post('/api/plants/pl-monstera/reviews', {
+  // pl-hoya: leave pl-monstera seed reviews alone for the e2e newest-first case.
+  const response = await request.post('/api/plants/pl-hoya/reviews', {
     headers: authHeaders(user.token),
     data: { rating: 4, text: '   trimmed enough text   ' },
   });
@@ -319,6 +321,7 @@ test('plant with no reviews → average 0, count 0, empty reviews', { tag: '@api
 test('average for ratings 5, 4, 5 → 4.7 (one decimal, halves up)', { tag: '@api' }, async ({
   request,
 }) => {
+  test.fail(true, 'F-04: review average for 5, 4, 5 is 4.6 instead of 4.7');
   const plantId = 'pl-fiddle';
   const ratings = [5, 4, 5] as const;
   for (const [index, rating] of ratings.entries()) {

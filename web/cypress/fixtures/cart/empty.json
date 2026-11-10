@@ -2,6 +2,8 @@
   "lines": [],
   "itemCount": 0,
   "subtotal": 0,
+  "discount": 0,
+  "promoCode": null,
   "shipping": 0,
   "total": 0
 }

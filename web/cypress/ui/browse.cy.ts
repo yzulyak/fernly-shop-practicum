@@ -39,7 +39,7 @@ describe('Browse page', () => {
     });
   });
 
-  it('shows $0.00 for a plant priced at 0', { tags: '@ui' }, () => {
+  it('shows $0.00 for a plant priced at 0', { tags: ['@ui', '@known-bug'] }, () => {
     cy.intercept('GET', '/api/plants?*', { fixture: 'plants/catalog-price-zero.json' }).as('plants');
     cy.visit('/');
     cy.wait('@plants');
@@ -49,7 +49,7 @@ describe('Browse page', () => {
     });
   });
 
-  it('shows an error with Try again when the catalog returns 500', { tags: '@ui' }, () => {
+  it('shows an error with Try again when the catalog returns 500', { tags: ['@ui', '@known-bug'] }, () => {
     cy.intercept('GET', '/api/plants?*', {
       statusCode: 500,
       fixture: 'plants/catalog-error-500.json',

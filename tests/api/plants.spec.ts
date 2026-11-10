@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { expectSchema } from '../helpers/schema';
 
 test('a plant matches the Plant schema', { tag: '@api' }, async ({ request }) => {
+  test.fail(true, 'F-12: GET /api/plants/{id} returns rating as a string, not a number');
   const response = await request.get('/api/plants/pl-monstera');
   expect(response.status()).toBe(200);
 
@@ -10,6 +11,7 @@ test('a plant matches the Plant schema', { tag: '@api' }, async ({ request }) =>
 });
 
 test('price-desc returns the most expensive plant first', { tag: '@api' }, async ({ request }) => {
+  test.fail(true, 'F-13: price-desc sorts cheapest first');
   const response = await request.get('/api/plants', { params: { sort: 'price-desc' } });
   expect(response.status()).toBe(200);
 
