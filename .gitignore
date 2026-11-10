@@ -5,5 +5,5 @@ dist/
 test-results/
 playwright-report/
 a11y-report/
-cypress/videos/
-cypress/screenshots/
+web/cypress/videos/
+web/cypress/screenshots/
