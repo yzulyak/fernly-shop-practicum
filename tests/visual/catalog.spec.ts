@@ -1,46 +1,51 @@
-import { expect, test } from '@playwright/test';
-import { signOutInBrowser } from '../a11y/helpers/session.js';
-import { BrowsePage } from '../pages/BrowsePage';
+import { test, expect, type Locator } from '@playwright/test';
+import { BrowsePage } from '../pages';
 
-const SAVED_KEY = 'fernly_saved';
-
-test.beforeEach(async ({ page }) => {
-  await signOutInBrowser(page);
-  await page.addInitScript((key) => {
-    localStorage.removeItem(key);
-  }, SAVED_KEY);
-});
+/** Wait until the card image has finished loading (no fixed timeout). */
+async function waitForCardImage(card: Locator): Promise<void> {
+  const image = card.getByRole('img');
+  await expect(image).toBeVisible();
+  await expect
+    .poll(async () => image.evaluate((el) => (el as HTMLImageElement).complete && (el as HTMLImageElement).naturalWidth > 0))
+    .toBe(true);
+}
 
 test('catalog first screen', { tag: '@visual' }, async ({ page }) => {
   const browse = new BrowsePage(page);
-  await browse.open();
-  await expect(browse.plantsCountHeading).toBeVisible();
-  await expect(browse.firstPlantCard).toBeVisible();
-  await expect(browse.firstPlantCard.getByRole('img')).toBeVisible();
+  await browse.goto();
+
+  await expect(browse.plantsHeading).toBeVisible();
+  await expect(browse.firstPlantHeading).toBeVisible();
+  await expect(browse.signOutButton).toHaveCount(0);
+  await waitForCardImage(browse.plantCard('Monstera Deliciosa'));
 
   await expect(page).toHaveScreenshot('catalog-first-screen.png');
 });
 
-test('Monstera Deliciosa card (in stock)', { tag: '@visual' }, async ({ page }) => {
+test('Monstera Deliciosa card (plenty in stock)', { tag: '@visual' }, async ({ page }) => {
   const browse = new BrowsePage(page);
-  const card = browse.plantCardByName('Monstera Deliciosa');
+  await browse.goto();
 
-  await browse.open();
+  const card = browse.plantCard('Monstera Deliciosa');
   await expect(card).toBeVisible();
-  await expect(card.getByRole('img')).toBeVisible();
+  await expect(browse.signOutButton).toHaveCount(0);
+  await waitForCardImage(card);
 
   await expect(card).toHaveScreenshot('monstera-deliciosa-card.png');
 });
 
-test('Hoya Carnosa card (low stock)', { tag: '@visual' }, async ({ page }) => {
+test('Hoya Carnosa card (few left)', { tag: '@visual' }, async ({ page }) => {
   const browse = new BrowsePage(page);
-  const card = browse.plantCardByName('Hoya Carnosa');
+  await browse.goto();
 
-  await browse.open();
-  await browse.searchPlants('Hoya Carnosa');
-  await expect(browse.plantsCountHeading).toHaveText('1 plants');
+  // Default page size is 12; Hoya Carnosa is on page 2 of the seed catalog.
+  await expect(browse.plantsHeading).toBeVisible();
+  await browse.goToNextPage();
+
+  const card = browse.plantCard('Hoya Carnosa');
   await expect(card).toBeVisible();
-  await expect(card.getByRole('img')).toBeVisible();
+  await expect(browse.signOutButton).toHaveCount(0);
+  await waitForCardImage(card);
 
   await expect(card).toHaveScreenshot('hoya-carnosa-card.png');
 });

@@ -1,684 +1,764 @@
 #!/usr/bin/env node
 /**
- * QA report: deterministic build from test artifacts + FINDINGS.md; publish to PR via gh.
- * Node 22+, no npm dependencies.
+ * Deterministic QA report builder/publisher. No AI, no dependencies.
+ *
+ *   node scripts/qa-report.mjs build
+ *   node scripts/qa-report.mjs publish [--dry-run]
+ *
+ * FINDINGS.md entries look like:
+ *   ### F-NN: <one-line title>
+ *   - **Where:** ...
+ *   - **Category:** ...
+ *   - **Impact:** ...
+ *   - **Evidence:** ...
+ *   - **Contradicts:** ...
+ *   - **Suggested fix (optional):** ...
  */
-import { spawnSync, execFileSync } from 'node:child_process';
+
+import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
   readFileSync,
-  writeFileSync,
   readdirSync,
+  writeFileSync,
 } from 'node:fs';
-import path from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = join(fileURLToPath(import.meta.url), '..', '..');
 const MARKER = '<!-- fernly-qa-report -->';
-const FINDING_KEY_MARKER = '<!-- qa-finding-key:';
+const FINDING_KEY_RE = /<!--\s*qa-finding-key:\s*([^\s]+)\s*-->/;
+const ANSI_RE = /\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const FINDING_HEADING_RE = /^### (F-\d+):\s*(.+)\s*$/gm;
+const FINDING_ID_IN_TEXT_RE = /\bF-\d+\b/;
 
 const PATHS = {
-  playwrightJson: path.join(ROOT, 'reports/playwright.json'),
-  cypressResults: path.join(ROOT, 'web/cypress/results'),
-  a11ySummary: path.join(ROOT, 'a11y-report/summary.md'),
-  findings: path.join(ROOT, 'FINDINGS.md'),
-  outDir: path.join(ROOT, 'qa-report'),
+  playwrightJson: join(ROOT, 'reports', 'playwright.json'),
+  cypressResults: join(ROOT, 'web', 'cypress', 'results'),
+  a11ySummary: join(ROOT, 'a11y-report', 'summary.md'),
+  findings: join(ROOT, 'FINDINGS.md'),
+  outDir: join(ROOT, 'qa-report'),
 };
 
-const PLAYWRIGHT_PROJECT_ORDER = ['api', 'e2e', 'a11y', 'visual', 'setup'];
-
-const ANSI_RE =
-  // eslint-disable-next-line no-control-regex
-  /\u001b\[[0-9;]*m|\u001b\][^\u0007]*\u0007|\u001b\][^\u001b\\]*(?:\\|\u001b\\)/g;
+function env(name, fallback = '') {
+  return process.env[name] ?? fallback;
+}
 
 function stripAnsi(text) {
   return String(text ?? '').replace(ANSI_RE, '');
 }
 
 function firstLine(text) {
-  const line = stripAnsi(text).split(/\r?\n/).find((l) => l.trim());
-  return line?.trim() ?? '';
+  return stripAnsi(text).split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
 }
 
-function slugTitle(title) {
-  return title
+function slugify(title) {
+  return String(title)
     .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
 }
 
-/** @returns {Array<{ id: string, title: string, body: string }>} */
-function parseFindings(md) {
-  const entries = [];
-  const re = /^### (F-\d+)\.\s+(.+)$/gm;
-  let m;
-  const starts = [];
-  while ((m = re.exec(md)) !== null) {
-    starts.push({ index: m.index, id: m[1], title: m[2].trim() });
-  }
-  for (let i = 0; i < starts.length; i++) {
-    const start = starts[i];
-    const end = i + 1 < starts.length ? starts[i + 1].index : md.length;
-    const slice = md.slice(start.index, end).trim();
-    const lines = slice.split(/\r?\n/);
-    const bodyLines = lines.slice(1);
-    entries.push({
-      id: start.id,
-      title: start.title,
-      body: bodyLines.join('\n').trim(),
-    });
-  }
-  return entries;
-}
-
-function readFindingsFile(filePath) {
-  if (!existsSync(filePath)) return [];
-  return parseFindings(readFileSync(filePath, 'utf8'));
-}
-
-const ZERO_SHA = '0000000000000000000000000000000000000000';
-
-function readBaseFindingsTitles(baseRef) {
-  const baseSha = env('BASE_SHA');
-  if (baseSha && baseSha !== ZERO_SHA) {
-    try {
-      const raw = execFileSync('git', ['show', `${baseSha}:FINDINGS.md`], {
-        cwd: ROOT,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      return new Set(readFindingsFileFromString(raw).map((e) => e.title));
-    } catch {
-      /* fall through to ref */
-    }
-  }
-  if (!baseRef) return new Set();
-  try {
-    const raw = execFileSync(
-      'git',
-      ['show', `origin/${baseRef}:FINDINGS.md`],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
-    );
-    return new Set(readFindingsFileFromString(raw).map((e) => e.title));
-  } catch {
-    return new Set();
-  }
-}
-
-function readFindingsFileFromString(md) {
-  return parseFindings(md);
-}
-
-function emptySuite(name) {
+function emptySuite(name, status = 'not run') {
   return {
     name,
-    status: 'not run',
+    status,
     passed: 0,
     failed: 0,
     knownBugs: 0,
     skipped: 0,
-    failures: [],
-    knownBugItems: [],
   };
 }
 
-/** Walk Playwright JSON report and bucket by project name on specs. */
-function parsePlaywrightJson(filePath) {
-  if (!existsSync(filePath)) {
-    return Object.fromEntries(
-      PLAYWRIGHT_PROJECT_ORDER.map((p) => [p, emptySuite(p)]),
-    );
-  }
-  const report = JSON.parse(readFileSync(filePath, 'utf8'));
-  /** @type {Record<string, ReturnType<typeof emptySuite>>} */
-  const byProject = Object.fromEntries(
-    PLAYWRIGHT_PROJECT_ORDER.map((p) => [p, { ...emptySuite(p), status: 'ok' }]),
-  );
-
-  /** @type {Array<{ project: string, title: string, file: string, line: number, error: string, knownFinding?: string, visual?: boolean, attachments?: string[] }>} */
-  const allCases = [];
-
-  function specFilePath(spec) {
-    const raw = spec.file ?? '';
-    if (!raw) return '';
-    return raw.startsWith('tests/') ? raw : `tests/${raw}`;
-  }
-
-  function walkSuites(suites, titlePath = []) {
-    for (const suite of suites ?? []) {
-      const nextPath = suite.title ? [...titlePath, suite.title] : titlePath;
-      for (const spec of suite.specs ?? []) {
-        for (const test of spec.tests ?? []) {
-          const bucket = test.projectName ?? 'e2e';
-          if (!byProject[bucket]) {
-            byProject[bucket] = {
-              ...emptySuite(`Playwright ${bucket}`),
-              name: `Playwright ${bucket}`,
-              status: 'ok',
-            };
-          }
-          const results = test.results ?? [];
-          if (!results.length) continue;
-
-          const result = pickResult(results);
-          const status = result.status;
-          const annotations = [
-            ...(spec.annotations ?? []),
-            ...(test.annotations ?? []),
-            ...(result.annotations ?? []),
-          ];
-          const failAnn = annotations.find((a) => a.type === 'fail');
-          const failDesc = stripAnsi(failAnn?.description ?? '');
-          const findingMatch = failDesc.match(/^(F-\d+):\s*(.+)$/);
-
-          const errors = (result.errors ?? [])
-            .map((e) => stripAnsi(e.message ?? e.stack ?? ''))
-            .filter(Boolean);
-          const errText = errors.join('\n');
-          const isVisual =
-            bucket === 'visual' || /toHaveScreenshot|screenshot/i.test(errText);
-
-          const file = specFilePath(spec) || test.location?.file || '';
-          const line = spec.line ?? test.location?.line ?? 0;
-
-          const row = {
-            project: bucket,
-            title: spec.title ?? nextPath.join(' › '),
-            file,
-            line,
-            error: firstLine(errText),
-            knownFinding: findingMatch
-              ? `${findingMatch[1]}: ${findingMatch[2]}`
-              : undefined,
-            visual: isVisual,
-            attachments: (result.attachments ?? []).map(
-              (a) => a.name ?? a.path ?? '',
-            ),
-          };
-
-          if (status === 'skipped') {
-            byProject[bucket].skipped += 1;
-          } else if (status === 'expected' || (findingMatch && status === 'failed')) {
-            byProject[bucket].knownBugs += 1;
-            byProject[bucket].knownBugItems.push(row);
-          } else if (status === 'passed') {
-            byProject[bucket].passed += 1;
-          } else if (
-            status === 'failed' ||
-            status === 'timedOut' ||
-            status === 'interrupted'
-          ) {
-            if (isVisual) {
-              byProject[bucket].failed += 1;
-              byProject[bucket].failures.push(row);
-            } else {
-              byProject[bucket].failed += 1;
-              byProject[bucket].failures.push(row);
-            }
-          } else {
-            byProject[bucket].passed += 1;
-          }
-          allCases.push(row);
-        }
-      }
-      walkSuites(suite.suites, nextPath);
-    }
-  }
-
-  walkSuites(report.suites ?? []);
-  for (const p of PLAYWRIGHT_PROJECT_ORDER) {
-    if (!byProject[p]) {
-      byProject[p] = emptySuite(`Playwright ${p}`);
-    } else {
-      byProject[p].name = `Playwright ${p}`;
-      const used =
-        byProject[p].passed +
-        byProject[p].failed +
-        byProject[p].knownBugs +
-        byProject[p].skipped;
-      if (used === 0) byProject[p].status = 'not run';
-    }
-  }
-  return { byProject, allCases, report };
-}
-
-function pickResult(results) {
-  if (!results?.length) return undefined;
-  return results[results.length - 1];
-}
-
-/** Parse JUnit XML (Cypress mocha-junit-reporter) without dependencies. */
-function parseJUnitXml(xml) {
-  const cases = [];
-  const testcaseRe = /<testcase\b([^>]*)>([\s\S]*?)<\/testcase>/g;
-  const fileFromSuites = [...xml.matchAll(/<testsuite\b[^>]*\bfile="([^"]+)"/g)].map(
-    (m) => m[1],
-  );
-  const defaultFile = fileFromSuites.find((f) => f.includes('.cy.')) ?? '';
-  let m;
-  while ((m = testcaseRe.exec(xml)) !== null) {
-    const attrs = m[1];
-    const body = m[2];
-    const name = attrs.match(/\bname="([^"]*)"/)?.[1] ?? '';
-    const classname = attrs.match(/\bclassname="([^"]*)"/)?.[1] ?? '';
-    const skipped = /<skipped\b/.test(body);
-    const failureMatch = body.match(/<failure[^>]*message="([^"]*)"/);
-    const failureBody = body.match(/<failure[^>]*>([\s\S]*?)<\/failure>/);
-    const err = failureMatch
-      ? firstLine(stripAnsi(decodeXml(failureMatch[1])))
-      : failureBody
-        ? firstLine(stripAnsi(decodeXml(failureBody[1])))
-        : '';
-    cases.push({
-      classname,
-      name,
-      skipped,
-      failure: Boolean(failureMatch || failureBody),
-      error: err,
-      file: defaultFile ? `web/${defaultFile}` : guessFileFromClassname(classname),
-      line: 0,
+function parseFindings(markdown) {
+  if (!markdown) return [];
+  const findings = [];
+  const matches = [...markdown.matchAll(FINDING_HEADING_RE)];
+  for (let i = 0; i < matches.length; i++) {
+    const match = matches[i];
+    const start = match.index;
+    const end = i + 1 < matches.length ? matches[i + 1].index : markdown.length;
+    const block = markdown.slice(start, end).trimEnd();
+    // Stop before Suspicions / Questions sections if a heading slipped in.
+    const cut = block.search(/\n## /);
+    const body = cut === -1 ? block : block.slice(0, cut).trimEnd();
+    const id = match[1];
+    const title = match[2].trim();
+    findings.push({
+      id,
+      title,
+      slug: slugify(title),
+      heading: `${id}: ${title}`,
+      body,
     });
   }
-  return cases;
+  return findings;
 }
 
-function decodeXml(s) {
-  return s
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+function readText(path) {
+  if (!existsSync(path)) return null;
+  return readFileSync(path, 'utf8');
 }
 
-function guessFileFromClassname(classname) {
-  const parts = classname.split('.');
-  const last = parts[parts.length - 1];
-  if (last?.endsWith('.cy.tsx') || last?.endsWith('.cy.ts')) return `cypress/${last}`;
-  return classname.replace(/\./g, '/') + '.cy.tsx';
-}
-
-function parseCypressResults(dir, suiteLabel) {
-  if (!existsSync(dir)) {
-    return emptySuite(suiteLabel);
+function gitShowFindings(baseRef) {
+  if (!baseRef) return null;
+  const result = spawnSync(
+    'git',
+    ['show', `origin/${baseRef}:FINDINGS.md`],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  if (result.status !== 0) {
+    // Fall back without origin/ prefix (shallow or local-only base).
+    const local = spawnSync('git', ['show', `${baseRef}:FINDINGS.md`], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+    if (local.status !== 0) return null;
+    return local.stdout;
   }
-  const files = readdirSync(dir).filter((f) => f.endsWith('.xml'));
-  if (!files.length) {
-    return emptySuite(suiteLabel);
-  }
-  const suite = { ...emptySuite(suiteLabel), status: 'ok' };
-  for (const file of files) {
-    const kind = file.startsWith('component-')
-      ? 'Cypress component'
-      : file.startsWith('ui-')
-        ? 'Cypress UI'
-        : null;
-    if (kind && kind !== suiteLabel) continue;
-    const xml = readFileSync(path.join(dir, file), 'utf8');
-    for (const tc of parseJUnitXml(xml)) {
-      if (tc.skipped) {
-        suite.skipped += 1;
-      } else if (tc.failure) {
-        suite.failed += 1;
-        suite.failures.push({
-          title: tc.name,
-          file: tc.file.startsWith('cypress/') ? `web/${tc.file}` : tc.file,
-          line: tc.line,
-          error: tc.error,
-        });
-      } else {
-        suite.passed += 1;
-      }
-    }
-  }
-  if (suite.passed + suite.failed + suite.skipped === 0) {
-    return emptySuite(suiteLabel);
-  }
-  return suite;
+  return result.stdout;
 }
 
-function env(name, fallback = '') {
-  return process.env[name]?.trim() || fallback;
-}
-
-function buildRunUrls() {
+function runUrl() {
+  const server = env('GITHUB_SERVER_URL', 'https://github.com').replace(/\/$/, '');
   const repo = env('GITHUB_REPOSITORY');
   const runId = env('GITHUB_RUN_ID');
-  const pr = env('PR_NUMBER');
-  const runUrl =
-    repo && runId
-      ? `https://github.com/${repo}/actions/runs/${runId}`
-      : '';
-  const prUrl =
-    repo && pr ? `https://github.com/${repo}/pull/${pr}` : '';
-  return { runUrl, prUrl };
+  if (!repo || !runId) return '';
+  return `${server}/${repo}/actions/runs/${runId}`;
 }
 
-function buildCommentMd(ctx) {
-  const { suites, visualFailures, findings, newFindings, a11yBlock, runUrl, prUrl } =
-    ctx;
-  const lines = [MARKER, '', '## QA report', ''];
-  if (runUrl) {
-    lines.push(`[Workflow run](${runUrl})${prUrl ? ` · [Pull request](${prUrl})` : ''}`, '');
+function prUrl() {
+  const server = env('GITHUB_SERVER_URL', 'https://github.com').replace(/\/$/, '');
+  const repo = env('GITHUB_REPOSITORY');
+  const pr = env('PR_NUMBER');
+  if (!repo || !pr) return '';
+  return `${server}/${repo}/pull/${pr}`;
+}
+
+function namesFinding(text, findings) {
+  const raw = String(text ?? '');
+  if (FINDING_ID_IN_TEXT_RE.test(raw)) return true;
+  const lower = raw.toLowerCase();
+  return findings.some((f) => lower.includes(f.title.toLowerCase()));
+}
+
+function extractFindingRefs(text, findings) {
+  const raw = String(text ?? '');
+  const refs = new Set();
+  for (const m of raw.matchAll(/\bF-\d+\b/g)) refs.add(m[0]);
+  for (const f of findings) {
+    if (raw.toLowerCase().includes(f.title.toLowerCase())) refs.add(f.id);
+  }
+  return [...refs];
+}
+
+/** Walk Playwright JSON and collect leaf tests with projectName. */
+function collectPlaywrightTests(report) {
+  const tests = [];
+
+  function walkSuite(suite, inheritedProject = '') {
+    const project =
+      suite.projectName ||
+      (suite.suites || suite.specs ? inheritedProject : inheritedProject);
+
+    for (const spec of suite.specs ?? []) {
+      for (const test of spec.tests ?? []) {
+        const results = test.results ?? [];
+        const last = results[results.length - 1] ?? {};
+        const annotationKey = (a) => `${a.type ?? ''}\0${a.description ?? ''}`;
+        const annotationMap = new Map();
+        for (const a of [...(test.annotations ?? []), ...(last.annotations ?? [])]) {
+          annotationMap.set(annotationKey(a), a);
+        }
+        const annotations = [...annotationMap.values()];
+        const status = last.status ?? test.status ?? 'skipped';
+        const expectedStatus = last.expectedStatus ?? test.expectedStatus ?? 'passed';
+        const errors = [
+          ...(last.errors ?? []).map((e) => e.message || e.value || String(e)),
+          last.error?.message,
+        ].filter(Boolean);
+        const location = spec.file
+          ? `${spec.file}${spec.line != null ? `:${spec.line}` : ''}`
+          : '';
+        tests.push({
+          title: [...(spec.titlePath ?? []), spec.title].filter(Boolean).join(' › ') || spec.title,
+          projectName: test.projectName || project || inheritedProject || 'playwright',
+          status,
+          expectedStatus,
+          annotations,
+          errors,
+          location,
+          attachments: last.attachments ?? [],
+        });
+      }
+    }
+
+    for (const child of suite.suites ?? []) {
+      // Top-level Playwright project suites often use the project as title when
+      // nested under an empty root; prefer explicit projectName when present.
+      const nextProject =
+        child.projectName ||
+        (!inheritedProject && child.title && !(child.specs?.length) ? child.title : inheritedProject) ||
+        inheritedProject;
+      walkSuite(child, nextProject);
+    }
+  }
+
+  for (const suite of report.suites ?? []) walkSuite(suite, '');
+  return tests;
+}
+
+function summarizePlaywright(tests, findings) {
+  const byProject = new Map();
+  const failed = [];
+  const knownBugs = [];
+  const visualChanges = [];
+
+  for (const t of tests) {
+    const project = t.projectName || 'playwright';
+    if (!byProject.has(project)) byProject.set(project, emptySuite(project, 'ok'));
+    const suite = byProject.get(project);
+
+    const failAnnotations = t.annotations.filter((a) => a.type === 'fail');
+    const isKnownBug = failAnnotations.some((a) => namesFinding(a.description, findings));
+
+    if (isKnownBug) {
+      suite.knownBugs += 1;
+      const refs = failAnnotations.flatMap((a) => extractFindingRefs(a.description, findings));
+      knownBugs.push({
+        project,
+        title: t.title,
+        location: t.location,
+        annotation: failAnnotations.map((a) => a.description).filter(Boolean).join('; '),
+        findings: refs,
+      });
+    } else if (t.status === 'skipped' || t.status === 'interrupted') {
+      suite.skipped += 1;
+    } else if (t.status === 'failed' || t.status === 'timedOut') {
+      suite.failed += 1;
+      const errorLine = firstLine(t.errors[0] ?? 'failed');
+      const entry = {
+        project,
+        title: t.title,
+        location: t.location,
+        error: errorLine,
+      };
+      failed.push(entry);
+      if (project === 'visual') {
+        visualChanges.push({
+          ...entry,
+          note: 'Images are in the playwright-report artifact.',
+        });
+      }
+    } else {
+      suite.passed += 1;
+    }
+  }
+
+  return { byProject, failed, knownBugs, visualChanges };
+}
+
+function parseJunitXml(xml, sourceLabel) {
+  const tests = [];
+  // mocha-junit-reporter emits <testcase ...> with optional <failure>/<skipped>/<error>
+  const caseRe =
+    /<testcase\b([^>]*)>([\s\S]*?)<\/testcase>|<testcase\b([^>]*)\/>/g;
+  let m;
+  while ((m = caseRe.exec(xml))) {
+    const attrs = m[1] ?? m[3] ?? '';
+    const body = m[2] ?? '';
+    const name = attr(attrs, 'name') || 'test';
+    const classname = attr(attrs, 'classname') || '';
+    const file = attr(attrs, 'file') || '';
+    const line = attr(attrs, 'line') || '';
+    const location = file ? `${file}${line ? `:${line}` : ''}` : classname;
+
+    if (/<skipped\b/i.test(body)) {
+      tests.push({ name, location, status: 'skipped', error: '' });
+    } else if (/<failure\b/i.test(body) || /<error\b/i.test(body)) {
+      const failMatch =
+        body.match(/<(?:failure|error)\b[^>]*>([\s\S]*?)<\/(?:failure|error)>/i) ||
+        body.match(/<(?:failure|error)\b[^>]*message="([^"]*)"/i);
+      let error = '';
+      if (failMatch) {
+        error = decodeXml(failMatch[1] || '');
+      }
+      tests.push({ name, location, status: 'failed', error: firstLine(error) });
+    } else {
+      tests.push({ name, location, status: 'passed', error: '' });
+    }
+  }
+
+  // Also count tests from tests= attributes if no testcase nodes (empty file).
+  if (tests.length === 0 && /<testsuite\b/i.test(xml)) {
+    return { tests, sourceLabel, empty: true };
+  }
+  return { tests, sourceLabel, empty: false };
+}
+
+function attr(attrs, name) {
+  const m = attrs.match(new RegExp(`\\b${name}="([^"]*)"`, 'i'));
+  return m ? decodeXml(m[1]) : '';
+}
+
+function decodeXml(text) {
+  return String(text)
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#10;/g, '\n')
+    .replace(/&#13;/g, '\r')
+    .replace(/&amp;/g, '&');
+}
+
+function summarizeCypress(kind) {
+  const suite = emptySuite(
+    kind === 'component' ? 'Cypress component' : 'Cypress UI',
+    'not run',
+  );
+  const failed = [];
+  if (!existsSync(PATHS.cypressResults)) return { suite, failed };
+
+  const files = readdirSync(PATHS.cypressResults)
+    .filter((f) => f.endsWith('.xml') && f.startsWith(`${kind}-`))
+    .sort();
+  if (files.length === 0) return { suite, failed };
+
+  suite.status = 'ok';
+  for (const file of files) {
+    const xml = readFileSync(join(PATHS.cypressResults, file), 'utf8');
+    const parsed = parseJunitXml(xml, file);
+    for (const t of parsed.tests) {
+      if (t.status === 'skipped') suite.skipped += 1;
+      else if (t.status === 'failed') {
+        suite.failed += 1;
+        failed.push({
+          project: suite.name,
+          title: t.name,
+          location: t.location || file,
+          error: t.error || 'failed',
+        });
+      } else suite.passed += 1;
+    }
+    // mocha-junit-reporter often omits filtered/pending cases as <testcase>,
+    // but still reports them on the root testsuites skipped= attribute.
+    const rootSkipped = Number(
+      (xml.match(/<testsuites\b[^>]*\bskipped="(\d+)"/i) || [])[1] || 0,
+    );
+    const already = parsed.tests.filter((t) => t.status === 'skipped').length;
+    suite.skipped += Math.max(0, rootSkipped - already);
+  }
+  return { suite, failed };
+}
+
+function suiteRow(suite) {
+  if (suite.status === 'not run') {
+    return `| ${suite.name} | not run | not run | not run | not run |`;
+  }
+  return `| ${suite.name} | ${suite.passed} | ${suite.failed} | ${suite.knownBugs} | ${suite.skipped} |`;
+}
+
+function buildComment({
+  suites,
+  failed,
+  knownBugs,
+  visualChanges,
+  findings,
+  newFindings,
+  a11ySummary,
+  link,
+}) {
+  const lines = [
+    MARKER,
+    '## QA report',
+    '',
+    '| Suite | Passed | Failed | Known bugs | Skipped |',
+    '| --- | ---: | ---: | ---: | ---: |',
+    ...suites.map(suiteRow),
+    '',
+  ];
+
+  lines.push('### Failed tests', '');
+  if (failed.length === 0) {
+    lines.push('_None._', '');
+  } else {
+    for (const f of failed) {
+      const loc = f.location || '(no location)';
+      lines.push(`- **${f.project}** — ${f.title}`);
+      lines.push(`  - \`${loc}\``);
+      if (f.error) lines.push(`  - ${f.error}`);
+    }
+    lines.push('');
   }
 
   lines.push(
-    '| Suite | Passed | Failed | Known bugs | Skipped |',
-    '| --- | ---: | ---: | ---: | ---: |',
+    '### Visual changes',
+    '',
+    'A person decides: defect, intended or noise. Diff images are in the `playwright-report` artifact.',
+    '',
   );
-  for (const s of suites) {
-    const label = s.status === 'not run' ? `${s.name} _(not run)_` : s.name;
-    if (s.status === 'not run') {
-      lines.push(`| ${label} | — | — | — | — |`);
-    } else {
-      lines.push(
-        `| ${s.name} | ${s.passed} | ${s.failed} | ${s.knownBugs} | ${s.skipped} |`,
-      );
-    }
-  }
-  lines.push('');
-
-  const hardFails = suites.flatMap((s) =>
-    s.failures.map((f) => ({ suite: s.name, ...f })),
-  );
-  if (hardFails.length) {
-    lines.push('### Failed tests', '');
-    for (const f of hardFails) {
-      const loc = f.file ? `${f.file}:${f.line || 1}` : f.suite;
-      lines.push(`- **${f.title}** (\`${loc}\`) — ${f.error || '(no message)'}`);
+  if (visualChanges.length === 0) {
+    lines.push('_None._', '');
+  } else {
+    for (const v of visualChanges) {
+      lines.push(`- **${v.title}** — \`${v.location || 'visual'}\``);
+      if (v.error) lines.push(`  - ${v.error}`);
     }
     lines.push('');
   }
 
-  if (visualFailures.length) {
-    lines.push(
-      '### Visual changes',
-      '',
-      '_A person decides: defect, intended, or noise._',
-      '',
-      'Diff images ship in the **playwright-report** workflow artifact (HTML report attachments).',
-      '',
-    );
-    for (const v of visualFailures) {
-      const loc = v.file ? `${v.file}:${v.line || 1}` : v.project;
-      lines.push(`- **${v.title}** (\`${loc}\`) — ${v.error || 'Screenshot mismatch'}`);
+  lines.push('### Known bugs', '');
+  if (knownBugs.length === 0) {
+    lines.push('_None._', '');
+  } else {
+    for (const k of knownBugs) {
+      const refs = k.findings?.length ? ` (${k.findings.join(', ')})` : '';
+      lines.push(`- **${k.project}** — ${k.title}${refs}`);
+      if (k.annotation) lines.push(`  - ${k.annotation}`);
     }
     lines.push('');
   }
 
-  const known = suites.flatMap((s) => s.knownBugItems ?? []);
-  if (known.length) {
-    lines.push('### Known bugs (expected failures)', '');
-    for (const k of known) {
-      const loc = k.file ? `${k.file}:${k.line || 1}` : k.project;
-      lines.push(
-        `- **${k.knownFinding ?? k.title}** — \`${loc}\`${k.error ? ` — ${k.error}` : ''}`,
-      );
-    }
-    lines.push('');
-  }
-
-  if (newFindings.length) {
-    lines.push('### New findings', '');
+  lines.push('### New findings', '');
+  if (!findings) {
+    lines.push('_FINDINGS.md not run / missing._', '');
+  } else if (newFindings.length === 0) {
+    lines.push('_None._', '');
+  } else {
     for (const f of newFindings) {
-      lines.push(`- **${f.id}. ${f.title}**`);
+      lines.push(`- **${f.id}: ${f.title}**`);
     }
     lines.push('');
   }
 
-  if (findings.length) {
-    lines.push('<details>', '<summary>All findings in this branch</summary>', '');
-    for (const f of findings) {
-      lines.push(`- ${f.id}. ${f.title}`);
-    }
-    lines.push('', '</details>', '');
+  lines.push('### Accessibility', '');
+  if (a11ySummary == null) {
+    lines.push('<details><summary>summary</summary>', '', '_not run_', '', '</details>', '');
+  } else {
+    lines.push('<details><summary>summary</summary>', '', a11ySummary.trim(), '', '</details>', '');
   }
 
-  if (a11yBlock) {
-    lines.push('<details>', '<summary>Accessibility summary</summary>', '', a11yBlock, '', '</details>', '');
+  if (link) {
+    lines.push(`Run: ${link}`, '');
   }
 
-  return lines.join('\n');
+  return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function buildIssuesJson(newFindings, runUrl, prUrl) {
+function buildIssues(newFindings, pr, run) {
   return newFindings.map((f) => {
-    const key = slugTitle(f.title);
-    const body = [
-      `## ${f.id}. ${f.title}`,
-      '',
-      f.body,
-      '',
-      prUrl ? `Pull request: ${prUrl}` : '',
-      runUrl ? `Workflow run: ${runUrl}` : '',
-      `${FINDING_KEY_MARKER} ${key} -->`,
-    ]
-      .filter(Boolean)
-      .join('\n');
+    const parts = [f.body, ''];
+    if (pr) parts.push(`PR: ${pr}`);
+    if (run) parts.push(`Run: ${run}`);
+    parts.push(`<!-- qa-finding-key: ${f.slug} -->`);
     return {
-      title: `${f.id}: ${f.title}`,
-      body,
-      key,
+      title: f.heading,
+      body: parts.join('\n'),
+      labels: ['qa-finding'],
+      key: f.slug,
+      findingId: f.id,
     };
   });
 }
 
-function commandMain() {
-  const [cmd, ...rest] = process.argv.slice(2);
-  if (cmd === 'build') return buildCommand(rest);
-  if (cmd === 'publish') return publishCommand(rest);
-  console.error('Usage: node scripts/qa-report.mjs build | publish [--dry-run]');
-  process.exit(2);
-}
-
-function buildCommand(_args) {
-  const baseRef = env('BASE_REF', 'main');
-  const sha = env('GITHUB_SHA', execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim());
-  const prNumber = env('PR_NUMBER');
-  const { runUrl, prUrl } = buildRunUrls();
-
-  const pw = parsePlaywrightJson(PATHS.playwrightJson);
-  const cypressComponent = parseCypressResults(PATHS.cypressResults, 'Cypress component');
-  const cypressUi = parseCypressResults(PATHS.cypressResults, 'Cypress UI');
-
-  const suites = [
-    cypressComponent,
-    cypressUi,
-    ...PLAYWRIGHT_PROJECT_ORDER.filter((p) => pw.byProject[p]).map((p) => ({
-      name: `Playwright ${p}`,
-      ...pw.byProject[p],
-    })),
-  ];
-
-  const visualFailures = suites
-    .filter((s) => s.name === 'Playwright visual')
-    .flatMap((s) => s.failures);
-
-  const findings = readFindingsFile(PATHS.findings);
-  const baseTitles = readBaseFindingsTitles(baseRef);
-  const newFindings = findings.filter((f) => !baseTitles.has(f.title));
-
-  let a11yBlock = '';
-  if (existsSync(PATHS.a11ySummary)) {
-    a11yBlock = readFileSync(PATHS.a11ySummary, 'utf8').trim();
-  }
-
-  const commentMd = buildCommentMd({
-    suites,
-    visualFailures,
-    findings,
-    newFindings,
-    a11yBlock,
-    runUrl,
-    prUrl,
-  });
-
-  const runJson = {
-    sha,
-    pr: prNumber ? Number(prNumber) : null,
-    runUrl,
-    time: new Date().toISOString(),
-    totals: Object.fromEntries(
-      suites.map((s) => [
-        s.name,
-        {
-          passed: s.status === 'not run' ? null : s.passed,
-          failed: s.status === 'not run' ? null : s.failed,
-          knownBugs: s.status === 'not run' ? null : s.knownBugs,
-          skipped: s.status === 'not run' ? null : s.skipped,
-          status: s.status,
-        },
-      ]),
-    ),
-    failed: suites.reduce((n, s) => n + (s.failed ?? 0), 0),
-    knownBugs: suites.reduce((n, s) => n + (s.knownBugs ?? 0), 0),
-    visualChanges: visualFailures.length,
-    findings: findings.length,
-    newFindings: newFindings.length,
-  };
-
-  const issuesJson = buildIssuesJson(newFindings, runUrl, prUrl);
-
-  mkdirSync(PATHS.outDir, { recursive: true });
-  writeFileSync(path.join(PATHS.outDir, 'comment.md'), commentMd);
-  writeFileSync(path.join(PATHS.outDir, 'run.json'), JSON.stringify(runJson, null, 2));
-  writeFileSync(path.join(PATHS.outDir, 'issues.json'), JSON.stringify(issuesJson, null, 2));
-  console.log(`Wrote ${PATHS.outDir}`);
-}
-
-function ghSpawn(args, options = {}) {
-  return spawnSync('gh', args, {
+function commandBuild() {
+  const baseRef = env('BASE_REF') || env('GITHUB_BASE_REF');
+  const sha = env('GITHUB_SHA') || spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: ROOT,
     encoding: 'utf8',
-    stdio: options.dryRun ? 'pipe' : 'inherit',
-    input: options.input,
-    ...options,
-  });
-}
+  }).stdout.trim();
+  const prNumber = env('PR_NUMBER') || '';
+  const link = runUrl();
+  const pr = prUrl();
+  const now = new Date().toISOString();
 
-function publishCommand(args) {
-  const dryRun = args.includes('--dry-run');
-  const repo = env('GITHUB_REPOSITORY');
-  const pr = env('PR_NUMBER');
-  if (!pr) {
-    console.log('No PR_NUMBER — skipping publish (artifact-only run).');
-    return;
-  }
-  if (!repo) {
-    console.error('publish requires GITHUB_REPOSITORY');
-    process.exit(2);
-  }
+  const findingsMd = readText(PATHS.findings);
+  const findings = findingsMd ? parseFindings(findingsMd) : null;
+  const baseFindingsMd = gitShowFindings(baseRef);
+  const baseTitles = new Set(
+    (baseFindingsMd ? parseFindings(baseFindingsMd) : []).map((f) => f.title),
+  );
+  const newFindings =
+    findings == null
+      ? []
+      : findings.filter((f) => !baseTitles.has(f.title));
 
-  const commentPath = path.join(PATHS.outDir, 'comment.md');
-  const issuesPath = path.join(PATHS.outDir, 'issues.json');
-  if (!existsSync(commentPath)) {
-    console.error('Missing qa-report/comment.md — run build first');
-    process.exit(2);
-  }
-  const commentBody = readFileSync(commentPath, 'utf8');
-  const issues = existsSync(issuesPath)
-    ? JSON.parse(readFileSync(issuesPath, 'utf8'))
-    : [];
+  const a11ySummary = readText(PATHS.a11ySummary);
 
-  const listArgs = [
-    'issue',
-    'list',
-    '--repo',
-    repo,
-    '--label',
-    'qa-finding',
-    '--state',
-    'all',
-    '--json',
-    'body',
-    '--limit',
-    '500',
-  ];
-  if (dryRun) {
-    console.log('[dry-run] gh', listArgs.join(' '));
-  }
-  const listed = dryRun
-    ? { stdout: '[]' }
-    : ghSpawn(listArgs, { stdio: 'pipe' });
-  if (!dryRun && listed.status !== 0) {
-    process.exit(listed.status ?? 1);
-  }
-  const existingKeys = new Set();
-  for (const row of JSON.parse(listed.stdout || '[]')) {
-    const keyMatch = row.body?.match(
-      new RegExp(`${FINDING_KEY_MARKER}\\s+([\\w-]+)\\s*-->`),
-    );
-    if (keyMatch) existingKeys.add(keyMatch[1]);
-  }
+  const suites = [];
+  const allFailed = [];
+  let knownBugs = [];
+  let visualChanges = [];
+  const playwrightProjects = [];
 
-  const viewArgs = ['pr', 'view', pr, '--repo', repo, '--json', 'comments'];
-  const viewed = dryRun
-    ? { stdout: '{"comments":[]}' }
-    : ghSpawn(viewArgs, { stdio: 'pipe' });
-  let commentId = null;
-  if (viewed.stdout) {
-    const data = JSON.parse(viewed.stdout);
-    const hit = (data.comments ?? []).find((c) =>
-      (c.body ?? '').trimStart().startsWith(MARKER),
-    );
-    commentId = hit?.id ?? null;
-  }
+  const cyComponent = summarizeCypress('component');
+  const cyUi = summarizeCypress('ui');
+  suites.push(cyComponent.suite, cyUi.suite);
+  allFailed.push(...cyComponent.failed, ...cyUi.failed);
 
-  if (commentId) {
-    const patchPayload = JSON.stringify({ body: commentBody });
-    const editArgs = [
-      'api',
-      '--method',
-      'PATCH',
-      '-H',
-      'Accept: application/vnd.github+json',
-      `/repos/${repo}/issues/comments/${commentId}`,
-      '--input',
-      '-',
-    ];
-    if (dryRun) {
-      console.log(`[dry-run] gh ${editArgs.join(' ')}  # ${commentPath}`);
-    } else {
-      const r = spawnSync('gh', editArgs, {
-        input: patchPayload,
-        encoding: 'utf8',
-        stdio: ['pipe', 'inherit', 'inherit'],
-      });
-      if (r.status !== 0) process.exit(r.status ?? 1);
+  const pwJson = readText(PATHS.playwrightJson);
+  if (!pwJson) {
+    for (const name of ['setup', 'api', 'e2e', 'a11y', 'visual']) {
+      suites.push(emptySuite(name, 'not run'));
+      playwrightProjects.push(emptySuite(name, 'not run'));
     }
   } else {
-    const createArgs = ['pr', 'comment', pr, '--repo', repo, '--body-file', commentPath];
-    if (dryRun) {
-      console.log('[dry-run] gh', createArgs.join(' '));
+    const report = JSON.parse(pwJson);
+    const tests = collectPlaywrightTests(report);
+    const summary = summarizePlaywright(tests, findings ?? []);
+    knownBugs = summary.knownBugs;
+    visualChanges = summary.visualChanges;
+    allFailed.push(...summary.failed.filter((f) => f.project !== 'visual'));
+    // Visual failures stay in the visual section; still count in suite failed.
+    // Keep them out of the generic failed list to avoid duplication? User asked
+    // for failed tests AND a visual section — list visual only in visual section.
+    const ordered = [...summary.byProject.keys()].sort((a, b) => {
+      const order = ['setup', 'api', 'e2e', 'a11y', 'visual'];
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+    if (ordered.length === 0) {
+      suites.push(emptySuite('playwright', 'ok'));
+      playwrightProjects.push(emptySuite('playwright', 'ok'));
     } else {
-      const r = ghSpawn(createArgs);
-      if (r.status !== 0) process.exit(r.status ?? 1);
+      for (const name of ordered) {
+        const suite = summary.byProject.get(name);
+        suites.push(suite);
+        playwrightProjects.push(suite);
+      }
     }
+  }
+
+  const comment = buildComment({
+    suites,
+    failed: allFailed,
+    knownBugs,
+    visualChanges,
+    findings,
+    newFindings,
+    a11ySummary,
+    link,
+  });
+
+  const issues = buildIssues(newFindings, pr, link);
+
+  const totals = Object.fromEntries(
+    suites.map((s) => [
+      s.name,
+      {
+        status: s.status,
+        passed: s.passed,
+        failed: s.failed,
+        knownBugs: s.knownBugs,
+        skipped: s.skipped,
+      },
+    ]),
+  );
+
+  const run = {
+    sha,
+    pr: prNumber ? Number(prNumber) : null,
+    runUrl: link || null,
+    time: now,
+    totals,
+    failed: allFailed,
+    knownBugs,
+    visualChanges,
+    findings: findings ? findings.map((f) => ({ id: f.id, title: f.title })) : null,
+    newFindings: newFindings.map((f) => ({ id: f.id, title: f.title, key: f.slug })),
+  };
+
+  mkdirSync(PATHS.outDir, { recursive: true });
+  writeFileSync(join(PATHS.outDir, 'comment.md'), comment);
+  writeFileSync(join(PATHS.outDir, 'issues.json'), `${JSON.stringify(issues, null, 2)}\n`);
+  writeFileSync(join(PATHS.outDir, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
+
+  console.log(`Wrote ${relative(ROOT, PATHS.outDir)}/{comment.md,issues.json,run.json}`);
+  console.log(
+    `Suites: ${suites.map((s) => `${s.name}=${s.status === 'not run' ? 'not run' : `${s.passed}p/${s.failed}f/${s.knownBugs}k/${s.skipped}s`}`).join(', ')}`,
+  );
+  console.log(`New findings: ${newFindings.length}`);
+}
+
+function gh(args, { input, dryRun, label } = {}) {
+  if (dryRun) {
+    console.log(`[dry-run] gh ${args.map(shellQuote).join(' ')}`);
+    if (input != null) {
+      console.log(`[dry-run] stdin (${label || 'body'}, ${input.length} bytes):`);
+      console.log(input);
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  }
+  const result = spawnSync('gh', args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input: input ?? undefined,
+    env: process.env,
+  });
+  if (result.status !== 0) {
+    const err = result.stderr || result.stdout || `gh exited ${result.status}`;
+    throw new Error(err.trim());
+  }
+  return result;
+}
+
+function shellQuote(value) {
+  // Display-only for dry-run logs; never passed to a shell.
+  if (/^[A-Za-z0-9_/@.=:,+-]+$/.test(value)) return value;
+  return JSON.stringify(value);
+}
+
+function commandPublish(dryRun) {
+  const repo = env('GITHUB_REPOSITORY');
+  const prNumber = env('PR_NUMBER');
+  if (!repo) throw new Error('GITHUB_REPOSITORY is required');
+  if (!prNumber) throw new Error('PR_NUMBER is required');
+
+  const commentPath = join(PATHS.outDir, 'comment.md');
+  const issuesPath = join(PATHS.outDir, 'issues.json');
+  if (!existsSync(commentPath) || !existsSync(issuesPath)) {
+    throw new Error('qa-report/ missing — run build first');
+  }
+
+  const commentBody = readFileSync(commentPath, 'utf8');
+  const issues = JSON.parse(readFileSync(issuesPath, 'utf8'));
+
+  // One sticky PR comment: update if marker exists, otherwise create.
+  let existingId = null;
+  const listComments = spawnSync(
+    'gh',
+    ['api', `repos/${repo}/issues/${prNumber}/comments`, '--paginate'],
+    { cwd: ROOT, encoding: 'utf8', env: process.env },
+  );
+  if (listComments.status === 0) {
+    try {
+      const comments = JSON.parse(listComments.stdout || '[]');
+      const found = comments.find((c) => String(c.body || '').startsWith(MARKER));
+      if (found) existingId = found.id;
+    } catch {
+      /* treat as create */
+    }
+  } else if (dryRun) {
+    console.log(
+      '[dry-run] could not list PR comments; assuming create\n' +
+        String(listComments.stderr || listComments.stdout || '').trim(),
+    );
+  } else {
+    throw new Error(
+      (listComments.stderr || listComments.stdout || 'gh api comments failed').trim(),
+    );
+  }
+
+  if (existingId) {
+    gh(
+      [
+        'api',
+        '-X',
+        'PATCH',
+        `repos/${repo}/issues/comments/${existingId}`,
+        '-F',
+        'body=@-',
+      ],
+      { input: commentBody, dryRun, label: 'comment update' },
+    );
+    console.log(dryRun ? `[dry-run] would update comment ${existingId}` : `Updated comment ${existingId}`);
+  } else {
+    gh(
+      [
+        'api',
+        '-X',
+        'POST',
+        `repos/${repo}/issues/${prNumber}/comments`,
+        '-F',
+        'body=@-',
+      ],
+      { input: commentBody, dryRun, label: 'comment create' },
+    );
+    console.log(dryRun ? '[dry-run] would create PR comment' : 'Created PR comment');
+  }
+
+  // Issues labelled qa-finding in every state; create only missing keys.
+  const filedKeys = new Set();
+  const issueSearch = spawnSync(
+    'gh',
+    [
+      'issue',
+      'list',
+      '--repo',
+      repo,
+      '--label',
+      'qa-finding',
+      '--state',
+      'all',
+      '--json',
+      'number,title,body,state',
+      '--limit',
+      '1000',
+    ],
+    { cwd: ROOT, encoding: 'utf8', env: process.env },
+  );
+  if (issueSearch.status === 0) {
+    const existingIssues = JSON.parse(issueSearch.stdout || '[]');
+    for (const issue of existingIssues) {
+      const m = String(issue.body || '').match(FINDING_KEY_RE);
+      if (m) filedKeys.add(m[1]);
+    }
+  } else if (!dryRun) {
+    throw new Error((issueSearch.stderr || issueSearch.stdout || 'gh issue list failed').trim());
+  } else {
+    console.log('[dry-run] could not list existing qa-finding issues; assuming none filed');
   }
 
   for (const issue of issues) {
-    if (existingKeys.has(issue.key)) continue;
-    const bodyFile = path.join(PATHS.outDir, `issue-${issue.key}.md`);
-    writeFileSync(bodyFile, issue.body);
-    const createIssueArgs = [
-      'issue',
-      'create',
-      '--repo',
-      repo,
-      '--title',
-      issue.title,
-      '--label',
-      'qa-finding',
-      '--body-file',
-      bodyFile,
-    ];
-    if (dryRun) {
-      console.log('[dry-run] gh', createIssueArgs.join(' '));
-    } else {
-      const r = ghSpawn(createIssueArgs);
-      if (r.status !== 0) process.exit(r.status ?? 1);
+    if (filedKeys.has(issue.key)) {
+      console.log(`Skip filed finding key: ${issue.key}`);
+      continue;
     }
+    gh(
+      [
+        'issue',
+        'create',
+        '--repo',
+        repo,
+        '--title',
+        issue.title,
+        '--label',
+        'qa-finding',
+        '--body-file',
+        '-',
+      ],
+      { input: issue.body, dryRun, label: `issue ${issue.key}` },
+    );
+    console.log(
+      dryRun
+        ? `[dry-run] would create issue for ${issue.key}`
+        : `Created issue for ${issue.key}`,
+    );
   }
 }
 
-commandMain();
+function usage() {
+  console.error(`Usage:
+  node scripts/qa-report.mjs build
+  node scripts/qa-report.mjs publish [--dry-run]`);
+  process.exit(2);
+}
+
+const [, , cmd, ...rest] = process.argv;
+if (cmd === 'build') {
+  commandBuild();
+} else if (cmd === 'publish') {
+  const dryRun = rest.includes('--dry-run');
+  commandPublish(dryRun);
+} else {
+  usage();
+}

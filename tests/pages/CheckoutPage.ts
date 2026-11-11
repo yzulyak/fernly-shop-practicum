@@ -1,21 +1,22 @@
 import type { Locator, Page } from '@playwright/test';
-import { OrderDetailPage } from './OrderDetailPage';
-
-export interface ShippingAddress {
-  fullName: string;
-  address: string;
-  city: string;
-  postalCode: string;
-}
+import { OrderPage } from './OrderPage';
 
 export class CheckoutPage {
+  readonly page: Page;
+  readonly heading: Locator;
+  readonly orderSummaryHeading: Locator;
+  readonly freeShipping: Locator;
   readonly fullName: Locator;
   readonly streetAddress: Locator;
   readonly city: Locator;
   readonly postalCode: Locator;
   readonly placeOrderButton: Locator;
 
-  constructor(private readonly page: Page) {
+  constructor(page: Page) {
+    this.page = page;
+    this.heading = page.getByRole('heading', { name: 'Checkout' });
+    this.orderSummaryHeading = page.getByRole('heading', { name: 'Order summary' });
+    this.freeShipping = page.getByText('Free', { exact: true });
     this.fullName = page.getByLabel('Full name');
     this.streetAddress = page.getByLabel('Street address');
     this.city = page.getByLabel('City');
@@ -23,28 +24,29 @@ export class CheckoutPage {
     this.placeOrderButton = page.getByRole('button', { name: 'Place order' });
   }
 
-  orderSummary(title = 'Order summary'): Locator {
-    return this.page.getByRole('region', { name: title });
-  }
-
   /**
-   * Fills shipping fields on the checkout form.
-   * @returns This checkout page.
+   * Fills the shipping address fields.
+   * @param address - Shipping field values
+   * @returns void
    */
-  async fillShipping(address: ShippingAddress): Promise<CheckoutPage> {
+  async fillShipping(address: {
+    fullName: string;
+    streetAddress: string;
+    city: string;
+    postalCode: string;
+  }): Promise<void> {
     await this.fullName.fill(address.fullName);
-    await this.streetAddress.fill(address.address);
+    await this.streetAddress.fill(address.streetAddress);
     await this.city.fill(address.city);
     await this.postalCode.fill(address.postalCode);
-    return this;
   }
 
   /**
-   * Submits the order.
-   * @returns The paid order detail page.
+   * Places the order.
+   * @returns Order confirmation page
    */
-  async placeOrder(): Promise<OrderDetailPage> {
+  async placeOrder(): Promise<OrderPage> {
     await this.placeOrderButton.click();
-    return new OrderDetailPage(this.page);
+    return new OrderPage(this.page);
   }
 }

@@ -1,6 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import type {
   FullConfig,
   FullResult,
@@ -8,50 +7,62 @@ import type {
   TestCase,
   TestResult,
 } from '@playwright/test/reporter';
-import type { ImpactValue, Result } from 'axe-core';
+import type { ImpactValue } from 'axe-core';
 import {
-  baselineEntryKey,
-  classifyViolationElement,
-  isBlockingViolation,
-  loadBaselineFrom,
+  blockingViolations,
+  classifyViolations,
+  findBaseline,
+  unusedBaselineEntries,
   type BaselineEntry,
-  type ClassifiedA11yElement,
-  type ViolationClassification,
-} from './baseline.js';
-import type { AxeResultsAttachment } from './helpers/scan.js';
+  type Classification,
+  type ClassifiedViolation,
+} from './baseline';
+import type { ScanAttachment } from './helpers/scan';
 
-export type A11yReporterOptions = {
+type ReporterOptions = {
   outputFolder?: string;
   baseline?: string;
   title?: string;
 };
 
-type ReportElement = ClassifiedA11yElement & {
-  url: string;
-  screenshotBase64?: string;
-  help: string;
-  helpUrl: string;
-  tags: string[];
+type ShotKey = string;
+
+type ReportElement = {
+  target: string;
+  html: string;
+  impact: ImpactValue | undefined;
+  failureSummary: string;
+  classification: Classification;
+  owner?: string;
+  expires?: string;
+  reason?: string;
+  screenshotDataUrl?: string;
 };
 
 type ReportRule = {
   id: string;
-  impact: ImpactValue;
   help: string;
   helpUrl: string;
+  impact: ImpactValue | undefined;
   tags: string[];
+  page: string;
+  url: string;
   elements: ReportElement[];
 };
 
-type ReportPage = {
-  name: string;
+type PageSummary = {
+  page: string;
   url: string;
+  scannedAt: string;
   elementCount: number;
-  impactCounts: Record<string, number>;
-  rulesPassed: number;
+  passes: number;
+  byImpact: Record<ImpactKey, number>;
+  classified: ClassifiedViolation[];
 };
 
-type A11yReport = {
+type ImpactKey = 'critical' | 'serious' | 'moderate' | 'minor';
+
+type ReportData = {
   title: string;
   generatedAt: string;
   totals: {
@@ -60,27 +71,26 @@ type A11yReport = {
     elementsAffected: number;
     blocking: number;
   };
-  byImpact: Record<string, { new: number; baselined: number; expired: number }>;
-  pages: ReportPage[];
+  impactCounts: Record<ImpactKey, number>;
+  statusCounts: Record<Classification, number>;
+  pages: PageSummary[];
   rules: ReportRule[];
-  unmatchedBaseline: BaselineEntry[];
-  blockingGroups: Array<{
-    rule: string;
-    page: string;
-    count: number;
-    exampleSelector: string;
-  }>;
+  blocking: ClassifiedViolation[];
+  unusedBaseline: BaselineEntry[];
+  baselinePath: string;
 };
 
-const IMPACT_ORDER: ImpactValue[] = ['critical', 'serious', 'moderate', 'minor'];
-const IMPACT_RANK: Record<string, number> = {
-  critical: 0,
-  serious: 1,
-  moderate: 2,
-  minor: 3,
-};
+const IMPACT_ORDER: ImpactKey[] = ['critical', 'serious', 'moderate', 'minor'];
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+function impactRank(impact: ImpactValue | undefined): number {
+  const key = (impact ?? 'minor') as ImpactKey;
+  const index = IMPACT_ORDER.indexOf(key);
+  return index === -1 ? IMPACT_ORDER.length : index;
+}
+
+function emptyImpactCounts(): Record<ImpactKey, number> {
+  return { critical: 0, serious: 0, moderate: 0, minor: 0 };
+}
 
 function escapeHtml(value: string): string {
   return value
@@ -91,339 +101,321 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function escapeMd(value: string): string {
-  return value.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+function readAttachmentBody(attachment: TestResult['attachments'][number]): Buffer | undefined {
+  if (attachment.body) return Buffer.from(attachment.body);
+  if (attachment.path) return readFileSync(attachment.path);
+  return undefined;
 }
 
-function readAttachmentBody(attachment: TestResult['attachments'][number]): Buffer | null {
-  if (attachment.body) {
-    return Buffer.isBuffer(attachment.body) ? attachment.body : Buffer.from(attachment.body);
+function shotKey(page: string, rule: string, index: number): ShotKey {
+  return `${page}:${rule}:${index}`;
+}
+
+function wcagTags(tags: readonly string[]): string[] {
+  return tags.filter((tag) => /wcag|best-practice|section508|cat\./i.test(tag));
+}
+
+class A11yReporter implements Reporter {
+  private readonly outputFolder: string;
+  private readonly baselinePath: string;
+  private readonly title: string;
+  private readonly scans: ScanAttachment[] = [];
+  private readonly shots = new Map<ShotKey, string>();
+
+  constructor(options: ReporterOptions = {}) {
+    this.outputFolder = options.outputFolder ?? 'a11y-report';
+    this.baselinePath = options.baseline ?? 'a11y-baseline.json';
+    this.title = options.title ?? 'Accessibility report';
   }
-  if (attachment.path) {
-    try {
-      return readFileSync(attachment.path);
-    } catch {
-      return null;
+
+  onTestEnd(_test: TestCase, result: TestResult): void {
+    for (const attachment of result.attachments) {
+      if (attachment.name === 'axe-results') {
+        const body = readAttachmentBody(attachment);
+        if (!body) continue;
+        const parsed = JSON.parse(body.toString('utf8')) as ScanAttachment;
+        this.scans.push(parsed);
+        continue;
+      }
+
+      const shotMatch = /^axe-shot:(.+):([^:]+):(\d+)$/.exec(attachment.name);
+      if (!shotMatch) continue;
+      const body = readAttachmentBody(attachment);
+      if (!body) continue;
+      const [, page, rule, index] = shotMatch;
+      this.shots.set(
+        shotKey(page, rule, Number(index)),
+        `data:image/png;base64,${body.toString('base64')}`,
+      );
     }
   }
-  return null;
-}
 
-function wcagTags(tags: string[]): string[] {
-  return tags.filter((tag) => /^wcag/i.test(tag));
-}
+  async onEnd(_result: FullResult): Promise<void> {
+    const report = this.buildReport();
+    const outDir = path.resolve(process.cwd(), this.outputFolder);
+    mkdirSync(outDir, { recursive: true });
 
-function impactSort(a: ImpactValue | null | undefined, b: ImpactValue | null | undefined): number {
-  return (IMPACT_RANK[a ?? 'minor'] ?? 99) - (IMPACT_RANK[b ?? 'minor'] ?? 99);
-}
+    writeFileSync(path.join(outDir, 'results.json'), JSON.stringify(report, null, 2));
+    writeFileSync(path.join(outDir, 'summary.md'), renderSummaryMd(report));
+    writeFileSync(path.join(outDir, 'index.html'), renderIndexHtml(report));
 
-function emptyImpactCounts(): Record<string, number> {
-  return { critical: 0, serious: 0, moderate: 0, minor: 0 };
-}
-
-function bumpClassification(
-  byImpact: A11yReport['byImpact'],
-  impact: ImpactValue | null | undefined,
-  classification: ViolationClassification,
-): void {
-  const key = impact ?? 'minor';
-  if (!byImpact[key]) {
-    byImpact[key] = { new: 0, baselined: 0, expired: 0 };
+    const { totals } = report;
+    console.log(
+      `A11y: ${totals.pagesScanned} pages, ${totals.rulesViolated} rules, ${totals.elementsAffected} elements, ${totals.blocking} blocking → ${this.outputFolder}/`,
+    );
   }
-  byImpact[key][classification] += 1;
-}
 
-function buildReport(
-  title: string,
-  baselineEntries: BaselineEntry[],
-  pageScans: Array<{
-    attachment: AxeResultsAttachment;
-    shots: Map<string, string>;
-  }>,
-): A11yReport {
-  const matchedBaselineKeys = new Set<string>();
-  const elements: ReportElement[] = [];
-  const ruleMeta = new Map<string, Pick<Result, 'help' | 'helpUrl' | 'impact' | 'tags'>>();
-  const pages: ReportPage[] = [];
-
-  for (const { attachment, shots } of pageScans) {
+  private buildReport(): ReportData {
+    const pages: PageSummary[] = [];
+    const rules: ReportRule[] = [];
+    const allClassified: ClassifiedViolation[] = [];
     const impactCounts = emptyImpactCounts();
-    const shotIndexByRule = new Map<string, number>();
+    const statusCounts: Record<Classification, number> = {
+      new: 0,
+      baselined: 0,
+      expired: 0,
+    };
 
-    for (const violation of attachment.violations) {
-      ruleMeta.set(violation.id, {
-        help: violation.help,
-        helpUrl: violation.helpUrl,
-        impact: violation.impact,
-        tags: violation.tags,
+    for (const scan of this.scans) {
+      const classified = classifyViolations(scan.page, scan.violations);
+      allClassified.push(...classified);
+
+      const byImpact = emptyImpactCounts();
+      for (const item of classified) {
+        const key = (item.impact ?? 'minor') as ImpactKey;
+        if (key in byImpact) byImpact[key] += 1;
+        if (key in impactCounts) impactCounts[key] += 1;
+        statusCounts[item.classification] += 1;
+      }
+
+      pages.push({
+        page: scan.page,
+        url: scan.url,
+        scannedAt: scan.scannedAt,
+        elementCount: classified.length,
+        passes: scan.passes.length,
+        byImpact,
+        classified,
       });
 
-      const ruleImpact = (violation.impact ?? 'minor') as ImpactValue;
+      for (const violation of scan.violations) {
+        const elements: ReportElement[] = violation.nodes.map((node, index) => {
+          const target = serializeTarget(node.target);
+          const matched = classified.find(
+            (item) => item.rule === violation.id && item.target === target,
+          );
+          const entry = findBaseline(violation.id, scan.page, target);
+          const classification = matched?.classification ?? 'new';
+          return {
+            target,
+            html: node.html,
+            impact: node.impact ?? violation.impact,
+            failureSummary: node.failureSummary ?? '',
+            classification,
+            owner: entry?.owner,
+            expires: entry?.expires,
+            reason: entry?.reason,
+            screenshotDataUrl: this.shots.get(shotKey(scan.page, violation.id, index)),
+          };
+        });
 
-      for (const node of violation.nodes) {
-        const impact = (node.impact ?? ruleImpact) as ImpactValue;
-        if (impact in impactCounts) impactCounts[impact] += 1;
-
-        const classified = classifyViolationElement(
-          attachment.page,
-          violation.id,
-          impact,
-          node.target,
-          node.html,
-          node.failureSummary,
-          baselineEntries,
-        );
-
-        if (classified.baseline) {
-          matchedBaselineKeys.add(baselineEntryKey(classified.baseline));
-        }
-
-        const shotIndex = shotIndexByRule.get(violation.id) ?? 0;
-        shotIndexByRule.set(violation.id, shotIndex + 1);
-        const shotKey = `axe-shot:${attachment.page}:${violation.id}:${shotIndex}`;
-        const screenshotBase64 = shots.get(shotKey);
-
-        elements.push({
-          ...classified,
-          url: attachment.url,
+        rules.push({
+          id: violation.id,
           help: violation.help,
           helpUrl: violation.helpUrl,
-          tags: violation.tags,
-          screenshotBase64,
+          impact: violation.impact,
+          tags: wcagTags(violation.tags),
+          page: scan.page,
+          url: scan.url,
+          elements,
         });
       }
     }
 
-    pages.push({
-      name: attachment.page,
-      url: attachment.url,
-      elementCount: attachment.violations.reduce((sum, v) => sum + v.nodes.length, 0),
-      impactCounts,
-      rulesPassed: attachment.passes.length,
+    rules.sort((a, b) => {
+      const rank = impactRank(a.impact) - impactRank(b.impact);
+      if (rank !== 0) return rank;
+      if (a.page !== b.page) return a.page.localeCompare(b.page);
+      return a.id.localeCompare(b.id);
     });
+
+    pages.sort((a, b) => a.page.localeCompare(b.page));
+
+    const blocking = blockingViolations(allClassified);
+    const unusedBaseline = unusedBaselineEntries(allClassified);
+    const rulesViolated = new Set(allClassified.map((item) => item.rule)).size;
+
+    return {
+      title: this.title,
+      generatedAt: new Date().toISOString(),
+      totals: {
+        pagesScanned: pages.length,
+        rulesViolated,
+        elementsAffected: allClassified.length,
+        blocking: blocking.length,
+      },
+      impactCounts,
+      statusCounts,
+      pages,
+      rules,
+      blocking,
+      unusedBaseline,
+      baselinePath: this.baselinePath,
+    };
   }
-
-  const byImpact: A11yReport['byImpact'] = {};
-  for (const element of elements) {
-    bumpClassification(byImpact, element.impact, element.classification);
-  }
-
-  const rulesById = new Map<string, ReportRule>();
-  for (const element of elements) {
-    let rule = rulesById.get(element.rule);
-    if (!rule) {
-      const meta = ruleMeta.get(element.rule);
-      rule = {
-        id: element.rule,
-        impact: (meta?.impact ?? element.impact) as ImpactValue,
-        help: meta?.help ?? element.help,
-        helpUrl: meta?.helpUrl ?? element.helpUrl,
-        tags: meta?.tags ?? element.tags,
-        elements: [],
-      };
-      rulesById.set(element.rule, rule);
-    }
-    rule.elements.push(element);
-    if (impactSort(element.impact, rule.impact) < 0) {
-      rule.impact = element.impact;
-    }
-  }
-
-  const rules = [...rulesById.values()].sort(
-    (a, b) => impactSort(a.impact, b.impact) || a.id.localeCompare(b.id),
-  );
-
-  const blocking = elements.filter(isBlockingViolation);
-  const blockingMap = new Map<string, { rule: string; page: string; count: number; exampleSelector: string }>();
-  for (const item of blocking) {
-    const key = `${item.rule}\0${item.page}`;
-    const existing = blockingMap.get(key);
-    if (existing) {
-      existing.count += 1;
-    } else {
-      blockingMap.set(key, {
-        rule: item.rule,
-        page: item.page,
-        count: 1,
-        exampleSelector: item.targetSelector,
-      });
-    }
-  }
-
-  const unmatchedBaseline = baselineEntries.filter(
-    (entry) => !matchedBaselineKeys.has(baselineEntryKey(entry)),
-  );
-
-  return {
-    title,
-    generatedAt: new Date().toISOString(),
-    totals: {
-      pagesScanned: pages.length,
-      rulesViolated: rules.length,
-      elementsAffected: elements.length,
-      blocking: blocking.length,
-    },
-    byImpact,
-    pages,
-    rules,
-    unmatchedBaseline,
-    blockingGroups: [...blockingMap.values()].sort(
-      (a, b) => impactSort(
-        rulesById.get(a.rule)?.impact,
-        rulesById.get(b.rule)?.impact,
-      ) || a.rule.localeCompare(b.rule) || a.page.localeCompare(b.page),
-    ),
-  };
 }
 
-function generateSummaryMd(report: A11yReport): string {
+function serializeTarget(target: ReadonlyArray<string | string[]>): string {
+  return target
+    .map((part) => (Array.isArray(part) ? part.join(' ') : part))
+    .join(' ');
+}
+
+function renderSummaryMd(report: ReportData): string {
+  const { totals, impactCounts, statusCounts, blocking, pages } = report;
   const lines: string[] = [];
+
   lines.push(`# ${report.title}`);
   lines.push('');
   lines.push(
-    `**${report.totals.pagesScanned}** pages scanned · **${report.totals.rulesViolated}** rules violated · **${report.totals.elementsAffected}** elements affected · **${report.totals.blocking}** blocking`,
+    `**${totals.pagesScanned}** pages scanned · **${totals.rulesViolated}** rules violated · **${totals.elementsAffected}** elements affected · **${totals.blocking}** blocking`,
   );
   lines.push('');
+  lines.push('## By impact');
+  lines.push('');
+  lines.push('| Impact | New | Baselined | Expired | Total |');
+  lines.push('| --- | ---: | ---: | ---: | ---: |');
 
-  lines.push('| Impact | New | Baselined | Expired |');
-  lines.push('| --- | ---: | ---: | ---: |');
   for (const impact of IMPACT_ORDER) {
-    const row = report.byImpact[impact] ?? { new: 0, baselined: 0, expired: 0 };
-    lines.push(
-      `| ${impact} | ${row.new} | ${row.baselined} | ${row.expired} |`,
-    );
+    let neu = 0;
+    let baselined = 0;
+    let expired = 0;
+    for (const page of pages) {
+      for (const item of page.classified) {
+        if ((item.impact ?? 'minor') !== impact) continue;
+        if (item.classification === 'new') neu += 1;
+        else if (item.classification === 'baselined') baselined += 1;
+        else expired += 1;
+      }
+    }
+    const total = neu + baselined + expired;
+    if (total === 0 && impactCounts[impact] === 0) {
+      lines.push(`| ${impact} | 0 | 0 | 0 | 0 |`);
+    } else {
+      lines.push(`| ${impact} | ${neu} | ${baselined} | ${expired} | ${total} |`);
+    }
   }
+
+  lines.push('');
+  lines.push(
+    `Status totals: new **${statusCounts.new}**, baselined **${statusCounts.baselined}**, expired **${statusCounts.expired}**.`,
+  );
+  lines.push('');
+  lines.push('## Blocking violations');
   lines.push('');
 
-  if (report.blockingGroups.length === 0) {
-    lines.push('No blocking accessibility violations.');
+  if (blocking.length === 0) {
+    lines.push('_None._');
   } else {
-    lines.push('## Blocking violations');
-    lines.push('');
     lines.push('| Rule | Page | Count | Example selector |');
     lines.push('| --- | --- | ---: | --- |');
-    for (const group of report.blockingGroups) {
+    const groups = new Map<string, { rule: string; page: string; count: number; example: string }>();
+    for (const item of blocking) {
+      const key = `${item.rule}::${item.page}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        groups.set(key, {
+          rule: item.rule,
+          page: item.page,
+          count: 1,
+          example: item.target,
+        });
+      }
+    }
+    for (const group of [...groups.values()]) {
       lines.push(
-        `| ${escapeMd(group.rule)} | ${escapeMd(group.page)} | ${group.count} | \`${escapeMd(group.exampleSelector)}\` |`,
+        `| \`${group.rule}\` | ${group.page} | ${group.count} | \`${group.example}\` |`,
       );
     }
   }
+
   lines.push('');
   return lines.join('\n');
 }
 
-function impactBarSegment(count: number, total: number, impact: string): string {
-  if (count === 0 || total === 0) return '';
-  const pct = Math.round((count / total) * 100);
-  return `<span class="bar-seg bar-${escapeHtml(impact)}" style="width:${pct}%" title="${escapeHtml(impact)}: ${count}"></span>`;
-}
-
-function classificationBadge(classification: ViolationClassification): string {
-  const cls = `badge badge-${classification}`;
-  const label = classification.charAt(0).toUpperCase() + classification.slice(1);
-  return `<span class="${cls}">${escapeHtml(label)}</span>`;
-}
-
-function generateIndexHtml(report: A11yReport): string {
-  const impactFilterCounts: Record<string, number> = emptyImpactCounts();
-  const statusCounts = { new: 0, baselined: 0, expired: 0 };
-  for (const rule of report.rules) {
-    for (const el of rule.elements) {
-      const imp = el.impact ?? 'minor';
-      if (imp in impactFilterCounts) impactFilterCounts[imp] += 1;
-      statusCounts[el.classification] += 1;
-    }
-  }
-
-  const pageOptions = report.pages
-    .map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`)
-    .join('');
-
-  const pagesTableRows = report.pages
+function renderIndexHtml(report: ReportData): string {
+  const { totals, impactCounts, statusCounts, pages, rules, unusedBaseline } = report;
+  const pageRows = pages
     .map((page) => {
-      const total = page.elementCount || 1;
-      const bar = IMPACT_ORDER.map((impact) =>
-        impactBarSegment(page.impactCounts[impact] ?? 0, total, impact),
-      ).join('');
-      return `<tr>
-        <td>${escapeHtml(page.name)}</td>
-        <td class="url"><a href="${escapeHtml(page.url)}">${escapeHtml(page.url)}</a></td>
-        <td class="num">${page.elementCount}</td>
-        <td><div class="impact-bar">${bar || '<span class="bar-empty">—</span>'}</div></td>
-        <td class="num">${page.rulesPassed}</td>
-      </tr>`;
+      const bar = IMPACT_ORDER.map((impact) => {
+        const count = page.byImpact[impact];
+        const width = page.elementCount === 0 ? 0 : Math.max(4, (count / Math.max(page.elementCount, 1)) * 100);
+        return `<span class="bar-seg ${impact}" style="width:${count ? width : 0}%" title="${impact}: ${count}"></span>`;
+      }).join('');
+      return `<tr data-page="${escapeHtml(page.page)}">
+  <td><strong>${escapeHtml(page.page)}</strong><div class="muted">${escapeHtml(page.url)}</div></td>
+  <td class="num">${page.elementCount}</td>
+  <td><div class="bar">${bar}</div><div class="bar-legend">${IMPACT_ORDER.map((i) => `${i[0]}:${page.byImpact[i]}`).join(' · ')}</div></td>
+  <td class="num">${page.passes}</td>
+</tr>`;
     })
     .join('\n');
 
-  const ruleCards = report.rules
-    .map((rule) => {
-      const wcag = wcagTags(rule.tags)
-        .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
-        .join('');
+  const ruleCards = rules
+    .map((rule, ruleIndex) => {
       const elementsHtml = rule.elements
         .map((el) => {
-          const searchBlob = [
-            rule.id,
-            rule.help,
-            el.page,
-            el.targetSelector,
-            el.html,
-            el.failureSummary ?? '',
-          ]
-            .join(' ')
-            .toLowerCase();
-          const shot = el.screenshotBase64
-            ? `<img class="shot" alt="" src="data:image/png;base64,${el.screenshotBase64}" />`
-            : `<div class="shot shot-missing">No screenshot</div>`;
+          const shot = el.screenshotDataUrl
+            ? `<img class="shot" src="${el.screenshotDataUrl}" alt="Screenshot of failing element" />`
+            : `<div class="shot missing">No screenshot</div>`;
           const baselineMeta =
-            el.baseline && el.classification !== 'new'
-              ? `<p class="baseline-meta"><strong>${escapeHtml(el.baseline.owner)}</strong> · expires ${escapeHtml(el.baseline.expires)} · ${escapeHtml(el.baseline.reason)}</p>`
+            el.classification === 'baselined' || el.classification === 'expired'
+              ? `<div class="meta">Owner: ${escapeHtml(el.owner ?? '—')} · Expires: ${escapeHtml(el.expires ?? '—')}${el.reason ? ` · ${escapeHtml(el.reason)}` : ''}</div>`
               : '';
-          return `<article class="element"
-            data-impact="${escapeHtml(el.impact ?? 'minor')}"
-            data-page="${escapeHtml(el.page)}"
-            data-status="${escapeHtml(el.classification)}"
-            data-search="${escapeHtml(searchBlob)}">
-            <div class="element-top">
-              ${classificationBadge(el.classification)}
-              <span class="element-page">${escapeHtml(el.page)}</span>
-            </div>
-            ${shot}
-            <p class="selector"><code>${escapeHtml(el.targetSelector)}</code></p>
-            <pre class="html-snippet">${escapeHtml(el.html)}</pre>
-            ${el.failureSummary ? `<pre class="failure">${escapeHtml(el.failureSummary.trim())}</pre>` : ''}
-            ${baselineMeta}
-          </article>`;
+          return `<article class="element" data-impact="${escapeHtml(el.impact ?? '')}" data-status="${el.classification}" data-page="${escapeHtml(rule.page)}" data-search="${escapeHtml(`${rule.id} ${rule.help} ${el.target} ${el.html} ${el.failureSummary}`).toLowerCase()}">
+  ${shot}
+  <div class="element-body">
+    <div class="element-top">
+      <span class="badge status ${el.classification}">${labelStatus(el.classification)}</span>
+      <code class="selector">${escapeHtml(el.target)}</code>
+    </div>
+    ${baselineMeta}
+    <pre class="snippet">${escapeHtml(el.html)}</pre>
+    <p class="summary">${escapeHtml(el.failureSummary || 'No failure summary')}</p>
+  </div>
+</article>`;
         })
         .join('\n');
 
-      return `<section class="rule-card" data-impact="${escapeHtml(rule.impact)}" data-rule="${escapeHtml(rule.id)}">
-        <header class="rule-header">
-          <span class="impact-pill impact-${escapeHtml(rule.impact)}">${escapeHtml(rule.impact)}</span>
-          <h2>${escapeHtml(rule.help)}</h2>
-          <p class="rule-id"><code>${escapeHtml(rule.id)}</code></p>
-          <div class="tags">${wcag}</div>
-          <p><a class="fix-link" href="${escapeHtml(rule.helpUrl)}" rel="noopener">How to fix it</a></p>
-        </header>
-        <div class="elements">${elementsHtml}</div>
-      </section>`;
+      return `<section class="rule-card" data-rule-index="${ruleIndex}" data-impact="${escapeHtml(rule.impact ?? '')}" data-page="${escapeHtml(rule.page)}" data-statuses="${escapeHtml(rule.elements.map((e) => e.classification).join(' '))}">
+  <header class="rule-head">
+    <span class="badge impact ${escapeHtml(rule.impact ?? 'minor')}">${escapeHtml(rule.impact ?? 'unknown')}</span>
+    <div>
+      <h2>${escapeHtml(rule.help)}</h2>
+      <div class="rule-meta">
+        <code>${escapeHtml(rule.id)}</code>
+        <span class="muted">${escapeHtml(rule.page)}</span>
+        ${rule.tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}
+        <a href="${escapeHtml(rule.helpUrl)}" target="_blank" rel="noopener noreferrer">How to fix it</a>
+      </div>
+    </div>
+  </header>
+  <div class="elements">${elementsHtml}</div>
+</section>`;
     })
     .join('\n');
 
-  const unmatchedList =
-    report.unmatchedBaseline.length === 0
-      ? '<p class="muted">All baseline entries matched at least one violation.</p>'
-      : `<ul class="unmatched">${report.unmatchedBaseline
+  const unusedHtml =
+    unusedBaseline.length === 0
+      ? `<p class="muted">None — every baseline entry matched at least one finding.</p>`
+      : `<ul class="unused">${unusedBaseline
           .map(
             (entry) =>
-              `<li><code>${escapeHtml(entry.rule)}</code> on <strong>${escapeHtml(entry.page)}</strong> · target <code>${escapeHtml(entry.target)}</code> · ${escapeHtml(entry.owner)} · expires ${escapeHtml(entry.expires)}</li>`,
+              `<li><code>${escapeHtml(entry.rule)}</code> on <strong>${escapeHtml(entry.page)}</strong> → <code>${escapeHtml(entry.target)}</code> <span class="muted">(${escapeHtml(entry.owner)}, expires ${escapeHtml(entry.expires)})</span></li>`,
           )
           .join('')}</ul>`;
-
-  const impactCheckboxes = IMPACT_ORDER.map((impact) => {
-    const count = impactFilterCounts[impact] ?? 0;
-    return `<label><input type="checkbox" class="filter-impact" value="${impact}" checked /> ${impact} (${count})</label>`;
-  }).join('');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -433,216 +425,294 @@ function generateIndexHtml(report: A11yReport): string {
 <title>${escapeHtml(report.title)}</title>
 <style>
 :root {
-  --bg: #0f1419;
-  --panel: #1a222c;
-  --text: #e7edf4;
-  --muted: #8b9aab;
-  --line: #2d3a47;
-  --critical: #ff5c5c;
-  --serious: #ff9f43;
-  --moderate: #ffd166;
-  --minor: #6ecbff;
-  --accent: #7ddf8a;
-  --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  --bg: #f6f3ee;
+  --panel: #fffdf9;
+  --ink: #1c241c;
+  --muted: #5f6b5f;
+  --line: #d9d2c6;
+  --critical: #9b1c1c;
+  --serious: #b45309;
+  --moderate: #a16207;
+  --minor: #3f6212;
+  --new: #9b1c1c;
+  --baselined: #1d4ed8;
+  --expired: #7c2d12;
+  --accent: #2f5d3a;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 * { box-sizing: border-box; }
-body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.45; }
-a { color: var(--accent); }
-header.page-header { padding: 1.5rem 1.25rem; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #15202b, var(--bg)); }
-header.page-header h1 { margin: 0 0 1rem; font-size: 1.5rem; font-weight: 650; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
-.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.75rem 1rem; }
-.stat .label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
-.stat .value { font-size: 1.75rem; font-weight: 700; margin-top: 0.15rem; }
-main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
-section { margin-bottom: 2rem; }
-h2.section-title { font-size: 1.1rem; margin: 0 0 0.75rem; }
-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
-th, td { border-bottom: 1px solid var(--line); padding: 0.55rem 0.4rem; text-align: left; vertical-align: middle; }
-th { color: var(--muted); font-weight: 600; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
-td.url { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.impact-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #243040; min-width: 80px; }
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, #e7efe4 0%, transparent 40%),
+    linear-gradient(180deg, #fbf8f2 0%, var(--bg) 100%);
+}
+header.app {
+  padding: 28px 28px 12px;
+  border-bottom: 1px solid var(--line);
+}
+header.app h1 { margin: 0 0 6px; font-size: 1.6rem; letter-spacing: -0.02em; }
+header.app .sub { color: var(--muted); margin: 0 0 18px; }
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.stat .n { font-size: 1.8rem; font-weight: 650; line-height: 1; }
+.stat .l { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+.stat.blocking .n { color: var(--critical); }
+main { padding: 20px 28px 48px; display: grid; gap: 22px; }
+section.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+}
+section.panel h2 { margin: 0 0 12px; font-size: 1.05rem; }
+table.pages { width: 100%; border-collapse: collapse; }
+table.pages th, table.pages td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+table.pages th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); font-size: 0.85rem; }
+.bar {
+  display: flex;
+  height: 10px;
+  background: #efeae1;
+  border-radius: 999px;
+  overflow: hidden;
+  min-width: 140px;
+}
 .bar-seg { display: block; height: 100%; }
-.bar-critical { background: var(--critical); }
-.bar-serious { background: var(--serious); }
-.bar-moderate { background: var(--moderate); }
-.bar-minor { background: var(--minor); }
-.bar-empty { color: var(--muted); font-size: 0.8rem; }
-.filters { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
-.filters label { font-size: 0.88rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.35rem; }
-.filters select, .filters input[type="search"] { background: #111820; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 0.35rem 0.5rem; }
-.rule-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 1rem; overflow: hidden; }
-.rule-card.hidden { display: none; }
-.rule-header { padding: 1rem 1rem 0.5rem; border-bottom: 1px solid var(--line); }
-.rule-header h2 { margin: 0.35rem 0; font-size: 1.05rem; }
-.rule-id { margin: 0; color: var(--muted); font-size: 0.85rem; }
-.impact-pill { display: inline-block; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.15rem 0.45rem; border-radius: 999px; }
-.impact-critical { background: color-mix(in srgb, var(--critical) 25%, transparent); color: var(--critical); }
-.impact-serious { background: color-mix(in srgb, var(--serious) 25%, transparent); color: var(--serious); }
-.impact-moderate { background: color-mix(in srgb, var(--moderate) 25%, transparent); color: var(--moderate); }
-.impact-minor { background: color-mix(in srgb, var(--minor) 25%, transparent); color: var(--minor); }
-.tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.5rem 0; }
-.tag { font-size: 0.72rem; background: #243040; color: var(--muted); padding: 0.15rem 0.4rem; border-radius: 4px; }
-.fix-link { font-size: 0.9rem; }
-.elements { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem; padding: 0.75rem; }
-.element { background: #121820; border: 1px solid var(--line); border-radius: 8px; padding: 0.65rem; }
-.element.hidden { display: none; }
-.element-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; gap: 0.5rem; }
-.element-page { font-size: 0.8rem; color: var(--muted); }
-.badge { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; padding: 0.12rem 0.35rem; border-radius: 4px; }
-.badge-new { background: #3d2a14; color: var(--serious); }
-.badge-baselined { background: #1a3324; color: var(--accent); }
-.badge-expired { background: #3d1a1a; color: var(--critical); }
-.shot { width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); display: block; background: #0a0e12; }
-.shot-missing { min-height: 80px; display: grid; place-items: center; color: var(--muted); font-size: 0.8rem; }
-.selector { margin: 0.4rem 0 0.25rem; font-size: 0.82rem; word-break: break-all; }
-.html-snippet, .failure { margin: 0.35rem 0; padding: 0.45rem; background: #0a0e12; border-radius: 6px; font-size: 0.72rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
-.baseline-meta { margin: 0.35rem 0 0; font-size: 0.78rem; color: var(--muted); }
-.muted { color: var(--muted); }
-.unmatched { margin: 0; padding-left: 1.2rem; }
-.unmatched li { margin: 0.35rem 0; }
+.bar-seg.critical { background: var(--critical); }
+.bar-seg.serious { background: var(--serious); }
+.bar-seg.moderate { background: var(--moderate); }
+.bar-seg.minor { background: var(--minor); }
+.bar-legend { margin-top: 4px; color: var(--muted); font-size: 0.75rem; }
+.filters {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1.4fr;
+  gap: 12px;
+  align-items: end;
+}
+.filters label { display: grid; gap: 6px; font-size: 0.85rem; color: var(--muted); }
+.filters .checks { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.filters input[type="search"], .filters select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--ink);
+}
+.rule-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.rule-card[hidden], .element[hidden], tr[hidden] { display: none !important; }
+.rule-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.rule-head h2 { margin: 0 0 6px; font-size: 1.05rem; }
+.rule-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.badge.impact.critical, .badge.status.new { background: #fee2e2; color: var(--critical); }
+.badge.impact.serious { background: #ffedd5; color: var(--serious); }
+.badge.impact.moderate { background: #fef3c7; color: var(--moderate); }
+.badge.impact.minor { background: #ecfccb; color: var(--minor); }
+.badge.status.baselined { background: #dbeafe; color: var(--baselined); }
+.badge.status.expired { background: #ffedd5; color: var(--expired); }
+.tag {
+  background: #eef2e8;
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 0.75rem;
+}
+.elements { display: grid; gap: 12px; }
+.element {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  background: #fff;
+}
+.shot {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #f3f0ea;
+  object-fit: contain;
+  max-height: 140px;
+}
+.shot.missing {
+  display: grid;
+  place-items: center;
+  min-height: 100px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.element-top { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+.selector { font-size: 0.85rem; }
+.snippet {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: #f4f1ea;
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+.summary { margin: 0; color: var(--muted); font-size: 0.9rem; }
+.meta { color: var(--muted); font-size: 0.82rem; margin-bottom: 4px; }
+.unused { margin: 0; padding-left: 18px; }
+.unused li { margin: 6px 0; }
+@media (max-width: 900px) {
+  .stats, .filters { grid-template-columns: 1fr 1fr; }
+  .element { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .stats, .filters { grid-template-columns: 1fr; }
+  main, header.app { padding-left: 16px; padding-right: 16px; }
+}
 </style>
 </head>
 <body>
-<header class="page-header">
+<header class="app">
   <h1>${escapeHtml(report.title)}</h1>
+  <p class="sub">Generated ${escapeHtml(report.generatedAt)} · baseline ${escapeHtml(report.baselinePath)}</p>
   <div class="stats">
-    <div class="stat"><div class="label">Pages scanned</div><div class="value">${report.totals.pagesScanned}</div></div>
-    <div class="stat"><div class="label">Rules violated</div><div class="value">${report.totals.rulesViolated}</div></div>
-    <div class="stat"><div class="label">Elements affected</div><div class="value">${report.totals.elementsAffected}</div></div>
-    <div class="stat"><div class="label">Blocking</div><div class="value">${report.totals.blocking}</div></div>
+    <div class="stat"><div class="n">${totals.pagesScanned}</div><div class="l">Pages scanned</div></div>
+    <div class="stat"><div class="n">${totals.rulesViolated}</div><div class="l">Rules violated</div></div>
+    <div class="stat"><div class="n">${totals.elementsAffected}</div><div class="l">Elements affected</div></div>
+    <div class="stat blocking"><div class="n">${totals.blocking}</div><div class="l">Blocking</div></div>
   </div>
 </header>
 <main>
-  <section>
-    <h2 class="section-title">Pages</h2>
-    <table>
-      <thead><tr><th>Page</th><th>URL</th><th>Elements</th><th>Impact mix</th><th>Rules passed</th></tr></thead>
-      <tbody>${pagesTableRows}</tbody>
+  <section class="panel">
+    <h2>Pages</h2>
+    <table class="pages">
+      <thead>
+        <tr><th>Page</th><th class="num">Elements</th><th>Impact</th><th class="num">Rules passed</th></tr>
+      </thead>
+      <tbody>
+        ${pageRows}
+      </tbody>
     </table>
   </section>
-  <section>
-    <h2 class="section-title">Violations</h2>
+
+  <section class="panel">
+    <h2>Filters</h2>
     <div class="filters">
-      <span>${impactCheckboxes}</span>
-      <label>Page <select id="filter-page"><option value="">All pages</option>${pageOptions}</select></label>
-      <label>Status <select id="filter-status"><option value="">All</option><option value="new">New (${statusCounts.new})</option><option value="baselined">Baselined (${statusCounts.baselined})</option><option value="expired">Expired (${statusCounts.expired})</option></select></label>
-      <label>Search <input type="search" id="filter-search" placeholder="Rule, selector, HTML…" /></label>
+      <div>
+        <div class="muted" style="margin-bottom:6px">Impact</div>
+        <div class="checks" id="impact-filters">
+          ${IMPACT_ORDER.map(
+            (impact) =>
+              `<label><input type="checkbox" name="impact" value="${impact}" checked /> ${impact} (${impactCounts[impact]})</label>`,
+          ).join('')}
+        </div>
+      </div>
+      <label>Page
+        <select id="page-filter">
+          <option value="">All pages</option>
+          ${pages.map((p) => `<option value="${escapeHtml(p.page)}">${escapeHtml(p.page)}</option>`).join('')}
+        </select>
+      </label>
+      <label>Status
+        <select id="status-filter">
+          <option value="">All statuses</option>
+          <option value="new">New (${statusCounts.new})</option>
+          <option value="baselined">Baselined (${statusCounts.baselined})</option>
+          <option value="expired">Expired (${statusCounts.expired})</option>
+        </select>
+      </label>
+      <label>Search
+        <input id="search-filter" type="search" placeholder="Rule, selector, HTML…" />
+      </label>
     </div>
-    <div id="rule-cards">${ruleCards}</div>
   </section>
+
   <section>
-    <h2 class="section-title">Baseline entries with no match (safe to delete)</h2>
-    ${unmatchedList}
+    <h2 style="margin:0 0 12px;font-size:1.05rem">Violations</h2>
+    <div id="rules">${ruleCards || '<p class="muted">No violations.</p>'}</div>
+  </section>
+
+  <section class="panel">
+    <h2>Unused baseline entries</h2>
+    <p class="muted">These matched nothing in this run — delete them from the baseline.</p>
+    ${unusedHtml}
   </section>
 </main>
 <script>
-(function () {
-  const impactBoxes = Array.from(document.querySelectorAll('.filter-impact'));
-  const pageSelect = document.getElementById('filter-page');
-  const statusSelect = document.getElementById('filter-status');
-  const searchInput = document.getElementById('filter-search');
+function applyFilters() {
+  const impacts = new Set([...document.querySelectorAll('input[name="impact"]:checked')].map((el) => el.value));
+  const page = document.getElementById('page-filter').value;
+  const status = document.getElementById('status-filter').value;
+  const q = document.getElementById('search-filter').value.trim().toLowerCase();
 
-  function activeImpacts() {
-    return new Set(impactBoxes.filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; }));
-  }
+  document.querySelectorAll('table.pages tbody tr').forEach((row) => {
+    row.hidden = Boolean(page) && row.getAttribute('data-page') !== page;
+  });
 
-  function applyFilters() {
-    const impacts = activeImpacts();
-    const page = pageSelect.value;
-    const status = statusSelect.value;
-    const q = (searchInput.value || '').trim().toLowerCase();
-
-    document.querySelectorAll('.rule-card').forEach(function (card) {
-      var visibleElements = 0;
-      card.querySelectorAll('.element').forEach(function (el) {
-        var ok = impacts.has(el.dataset.impact);
-        if (page && el.dataset.page !== page) ok = false;
-        if (status && el.dataset.status !== status) ok = false;
-        if (q && !(el.dataset.search || '').includes(q)) ok = false;
-        el.classList.toggle('hidden', !ok);
-        if (ok) visibleElements += 1;
-      });
-      card.classList.toggle('hidden', visibleElements === 0);
+  document.querySelectorAll('.rule-card').forEach((card) => {
+    const cardImpact = card.getAttribute('data-impact') || '';
+    const cardPage = card.getAttribute('data-page') || '';
+    let visibleElements = 0;
+    card.querySelectorAll('.element').forEach((el) => {
+      const elImpact = el.getAttribute('data-impact') || '';
+      const elStatus = el.getAttribute('data-status') || '';
+      const elPage = el.getAttribute('data-page') || '';
+      const hay = el.getAttribute('data-search') || '';
+      const okImpact = impacts.has(elImpact || 'minor');
+      const okPage = !page || elPage === page || cardPage === page;
+      const okStatus = !status || elStatus === status;
+      const okSearch = !q || hay.includes(q);
+      const show = okImpact && okPage && okStatus && okSearch;
+      el.hidden = !show;
+      if (show) visibleElements += 1;
     });
-  }
-
-  impactBoxes.forEach(function (cb) { cb.addEventListener('change', applyFilters); });
-  pageSelect.addEventListener('change', applyFilters);
-  statusSelect.addEventListener('change', applyFilters);
-  searchInput.addEventListener('input', applyFilters);
-})();
+    const okCardImpact = !cardImpact || impacts.has(cardImpact);
+    const okCardPage = !page || cardPage === page;
+    card.hidden = visibleElements === 0 || !okCardImpact || !okCardPage;
+  });
+}
+document.getElementById('impact-filters').addEventListener('change', applyFilters);
+document.getElementById('page-filter').addEventListener('change', applyFilters);
+document.getElementById('status-filter').addEventListener('change', applyFilters);
+document.getElementById('search-filter').addEventListener('input', applyFilters);
 </script>
 </body>
 </html>`;
 }
 
-class A11yReporter implements Reporter {
-  private options: Required<A11yReporterOptions>;
-  private pageScans: Array<{ attachment: AxeResultsAttachment; shots: Map<string, string> }> = [];
-
-  constructor(options: A11yReporterOptions = {}) {
-    const root = join(__dirname, '../..');
-    this.options = {
-      outputFolder: options.outputFolder ?? 'a11y-report',
-      baseline: options.baseline ?? 'tests/a11y/a11y-baseline.json',
-      title: options.title ?? 'Accessibility report',
-    };
-    this.options.outputFolder = resolve(root, this.options.outputFolder);
-    this.options.baseline = resolve(root, this.options.baseline);
-  }
-
-  onBegin(_config: FullConfig): void {
-    this.pageScans = [];
-  }
-
-  onTestEnd(_test: TestCase, result: TestResult): void {
-    let axePayload: AxeResultsAttachment | null = null;
-    const shots = new Map<string, string>();
-
-    for (const attachment of result.attachments) {
-      if (attachment.name === 'axe-results') {
-        const body = readAttachmentBody(attachment);
-        if (body) {
-          axePayload = JSON.parse(body.toString('utf8')) as AxeResultsAttachment;
-        }
-      } else if (attachment.name?.startsWith('axe-shot:')) {
-        const body = readAttachmentBody(attachment);
-        if (body) {
-          shots.set(attachment.name, body.toString('base64'));
-        }
-      }
-    }
-
-    if (axePayload) {
-      this.pageScans.push({ attachment: axePayload, shots });
-    }
-  }
-
-  onEnd(_result: FullResult): void {
-    if (this.pageScans.length === 0) {
-      return;
-    }
-
-    const baselineEntries = loadBaselineFrom(this.options.baseline);
-    const report = buildReport(this.options.title, baselineEntries, this.pageScans);
-
-    mkdirSync(this.options.outputFolder, { recursive: true });
-
-    const indexPath = join(this.options.outputFolder, 'index.html');
-    const summaryPath = join(this.options.outputFolder, 'summary.md');
-    const jsonPath = join(this.options.outputFolder, 'results.json');
-
-    writeFileSync(indexPath, generateIndexHtml(report), 'utf8');
-    writeFileSync(summaryPath, generateSummaryMd(report), 'utf8');
-    writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf8');
-
-    const { pagesScanned, rulesViolated, elementsAffected, blocking } = report.totals;
-    console.log(
-      `Accessibility: ${pagesScanned} pages, ${rulesViolated} rules, ${elementsAffected} elements, ${blocking} blocking → ${indexPath}`,
-    );
-  }
+function labelStatus(status: Classification): string {
+  if (status === 'new') return 'New';
+  if (status === 'baselined') return 'Baselined';
+  return 'Expired';
 }
 
 export default A11yReporter;

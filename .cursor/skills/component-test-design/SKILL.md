@@ -6,16 +6,18 @@ paths: "web/**"
 
 # Component test design
 
-1. Component: read its props in web/src/components and where it's used. Page: read its API calls in docs/APP-MAP.md.
+1. **Component:** read its props in `web/src/components` and where it's used. **Page:** read its API calls in `docs/APP-MAP.md`. Also use `docs/PRODUCT.md` for expected behavior.
 
-2. One table: ID | kind (render / state / interaction / boundary / accessibility, or for a page: positive / negative / edge) | given (props, or the API answer) | the user does | expected | source (a PRODUCT.md line, or "the component's purpose") | technique.
+2. **One table:** ID | kind (render / state / interaction / boundary / accessibility, or for a page: positive / negative / edge) | given (props, or the API answer) | the user does | expected | source (a PRODUCT.md line, or "the component's purpose") | technique.
 
-3. Techniques, named in their column: equivalence classes over each prop; boundaries (0, 1, the limit, one past it); states (disabled, loading, empty, error); callbacks (called with what); accessibility basics (every control has a role and a name).
+   Write the table to `web/cypress/test-design/<Name>.md` (`<Name>` = component or page name).
 
-4. A page gets at least: a normal answer, an empty answer, an error (500), signed out (401), and an extreme value (a very long name, price 0, a slow answer).
+3. **Techniques**, named in their column: equivalence classes over each prop; boundaries (0, 1, the limit, one past it); states (disabled, loading, empty, error); callbacks (called with what); accessibility basics (every control has a role and a name).
 
-5. What no document says: a row marked "assumed — ask", with no expected result.
+4. A **page** gets at least: a normal answer, an empty answer, an error (500), signed out (401), and an extreme value (a very long name, price 0, a slow answer).
 
-6. Stop. Show the table and wait for "approved" or changes. Write no test code.
+5. What no document says: a row marked `assumed — ask`, with no expected result.
 
-Before stopping, save the table to `web/cypress/test-design/<Name>.md`.
+6. **Stop.** Show the table and wait for "approved" or changes. Write no test code.
+
+After approval, test implementation is for the **cypress-test-writer** subagent — not this skill.

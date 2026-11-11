@@ -1,41 +1,34 @@
-import Ajv, { type AnySchema, type ErrorObject } from 'ajv';
+import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv';
 import type { APIRequestContext } from '@playwright/test';
 
-const ajv = new Ajv({ strict: false, allErrors: true });
+let ajvPromise: Promise<Ajv> | undefined;
 
-/** One load per worker. Each Playwright worker is its own process. */
-let openApiReady: Promise<void> | undefined;
-
-function isSchemaDocument(value: unknown): value is AnySchema {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function loadOpenApi(request: APIRequestContext): Promise<void> {
-  if (!openApiReady) {
-    openApiReady = (async () => {
+async function getAjv(request: APIRequestContext): Promise<Ajv> {
+  if (!ajvPromise) {
+    ajvPromise = (async () => {
       const response = await request.get('/openapi.json');
       if (!response.ok()) {
-        throw new Error(`GET /openapi.json failed with status ${response.status()}`);
+        throw new Error(`Failed to load /openapi.json: ${response.status()}`);
       }
       const doc: unknown = await response.json();
-      if (!isSchemaDocument(doc)) {
-        throw new Error('GET /openapi.json did not return a JSON object');
-      }
+      const ajv = new Ajv({ strict: false, allErrors: true });
       ajv.addSchema(doc, 'openapi');
-    })().catch((error: unknown) => {
-      openApiReady = undefined;
-      throw error;
-    });
+      return ajv;
+    })();
   }
-  return openApiReady;
+  return ajvPromise;
 }
 
-function formatAjvErrors(errors: ErrorObject[] | null | undefined): string {
-  const lines = (errors ?? []).map((error) => {
-    const path = error.instancePath === '' ? '/' : error.instancePath;
-    return `${path} ${error.message ?? error.keyword}`;
-  });
-  return lines.length > 0 ? lines.join('\n') : 'no Ajv errors reported';
+function formatErrors(errors: ErrorObject[] | null | undefined): string {
+  if (!errors || errors.length === 0) {
+    return '(no Ajv errors)';
+  }
+  return errors
+    .map((error) => {
+      const path = error.instancePath === '' ? '/' : error.instancePath;
+      return `${path}: ${error.message ?? 'validation failed'}`;
+    })
+    .join('\n');
 }
 
 export async function expectSchema(
@@ -43,17 +36,18 @@ export async function expectSchema(
   body: unknown,
   name: string,
 ): Promise<void> {
-  await loadOpenApi(request);
+  const ajv = await getAjv(request);
   const ref = `openapi#/components/schemas/${name}`;
-  const validate = ajv.getSchema(ref);
+  const validate: ValidateFunction | undefined = ajv.getSchema(ref);
+
   if (!validate) {
-    throw new Error(`Schema "${name}" does not exist at ${ref}`);
+    throw new Error(`Schema "${name}" not found at ${ref}`);
   }
+
   const valid = validate(body);
-  if (typeof valid !== 'boolean') {
-    throw new Error(`Schema "${name}" did not validate synchronously`);
-  }
   if (!valid) {
-    throw new Error(`Response does not match schema "${name}":\n${formatAjvErrors(validate.errors)}`);
+    throw new Error(
+      `Response does not match schema "${name}":\n${formatErrors(validate.errors)}`,
+    );
   }
 }

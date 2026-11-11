@@ -4,70 +4,67 @@ globs: tests/e2e/**, tests/visual/**, tests/pages/**
 alwaysApply: false
 ---
 
-# Page objects (Playwright)
+# Page objects
 
-## Where locators live
+## 1. Where locators live
 
-Locators and interactions belong in `tests/pages/*`; specs wire flows and call `expect`.
+Locators and actions belong in `tests/pages`. Specs import page objects and only describe the flow and assert.
 
-```typescript
-// ✅ GOOD — tests/e2e/browse.spec.ts
-const browse = new BrowsePage(page);
-await browse.open();
-await browse.selectSort('price-desc');
-await expect(browse.plantsCountHeading).toBeVisible();
-```
-
-```typescript
-// ❌ BAD — locator in the spec
-await page.getByLabel('Sort by').selectOption('price-desc');
-```
-
-## Locator order
-
-Prefer `getByRole`, then `getByLabel`, then `getByText`. Do not use CSS or XPath in page objects.
-
-```typescript
-// ✅ GOOD — tests/pages/BrowsePage.ts
+```ts
+// ✅ GOOD — tests/pages/BrowsePage.ts + tests/e2e/browse.spec.ts
 this.sortBy = page.getByLabel('Sort by');
-this.plantsCountHeading = page.getByRole('heading', { level: 2, name: /\d+ plants/ });
+await browse.sortPriceHighToLow();
+await expect(browse.firstPlantHeading).toHaveText(/* … */);
+
+// ❌ BAD — locator built in the spec
+await page.getByLabel('Sort by').selectOption({ label: 'Price: high to low' });
 ```
 
-```typescript
-// ❌ BAD — tests/a11y/helpers/scan.ts (not a page object pattern)
-return page.locator(selector).first();
+## 2. Locator order
+
+Prefer `getByRole`, then `getByLabel`, then `getByText`. Never CSS or XPath. An control with no accessible name (F-07 heart) is found by role inside its card, with a comment that names the finding.
+
+```ts
+// ✅ GOOD — tests/pages/BrowsePage.ts
+// F-07: Save (heart) button has no accessible name — find by role inside its card.
+return this.plantCard(plantName).getByRole('button');
+
+// ❌ BAD
+page.locator('.save');
+page.locator('//button[contains(@class,"save")]');
 ```
 
-## Actions return value
+## 3. Actions return nothing or the next page object
 
-Action methods perform one user step. Return `void` or `this` / the next page object — never assert.
+Async actions perform a user step and return `void` or the page that follows. They never assert.
 
-```typescript
-// ✅ GOOD
-async selectSort(value: string): Promise<BrowsePage> {
-  await this.sortBy.selectOption(value);
-  return this;
+```ts
+// ✅ GOOD — tests/pages/CartPage.ts / RegisterPage.ts
+async goToCheckout(): Promise<CheckoutPage> {
+  await this.goToCheckoutLink.click();
+  return new CheckoutPage(this.page);
+}
+async createAccount(/* … */): Promise<BrowsePage> { /* fill, click, return new BrowsePage */ }
+
+// ❌ BAD — assert inside the page object / return a boolean snapshot
+async goToCheckout(): Promise<void> {
+  await this.goToCheckoutLink.click();
+  await expect(this.page.getByRole('heading', { name: 'Checkout' })).toBeVisible();
 }
 ```
 
-```typescript
-// ❌ BAD — assertion inside a page object
-async selectSort(value: string) {
-  await this.sortBy.selectOption(value);
-  await expect(this.plantsCountHeading).toBeVisible();
+## 4. Assertions stay in the spec
+
+Every `expect` lives in `tests/e2e` (or visual specs). Page objects expose locators; specs keep the same assertions.
+
+```ts
+// ✅ GOOD — tests/e2e/plant-reviews.spec.ts
+await expect(plant.thanksToast).toBeVisible();
+await expect(plant.reviewsRegion).toContainText(reviewText);
+
+// ❌ BAD — expectation hidden in PlantPage
+async postReviewAndExpectThanks(): Promise<void> {
+  await this.postReviewButton.click();
+  await expect(this.thanksToast).toBeVisible();
 }
-```
-
-## Assertions stay in the spec
-
-Page objects expose `Locator`s; only `*.spec.ts` files import `expect` for UI checks.
-
-```typescript
-// ✅ GOOD — tests/e2e/browse.spec.ts
-await expect(browse.firstPlantCardHeading).toContainText(MOST_EXPENSIVE_NAME);
-```
-
-```typescript
-// ❌ BAD — would belong in a page object (never do this)
-await expect(page.getByRole('heading', { level: 3 })).toContainText(name);
 ```

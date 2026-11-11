@@ -1,34 +1,21 @@
-import dotenv from 'dotenv';
 import { defineConfig, devices } from '@playwright/test';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
-const apiURL = process.env.API_URL ?? 'http://localhost:8100';
-const webURL = process.env.WEB_URL ?? 'http://localhost:5173';
+const API_URL = process.env.API_URL || 'http://localhost:8100';
+const WEB_URL = process.env.WEB_URL || 'http://localhost:5173';
 
-const visualProject =
-  process.env.CI || process.env.VISUAL
-    ? [
-        {
-          name: 'visual',
-          testDir: 'tests/visual',
-          testMatch: /.*\.spec\.ts/,
-          dependencies: ['setup' as const],
-          use: {
-            baseURL: webURL,
-            ...devices['Desktop Chrome'],
-            viewport: { width: 1280, height: 800 },
-          },
-        },
-      ]
-    : [];
+const includeVisual = Boolean(process.env.CI || process.env.VISUAL);
 
 export default defineConfig({
-  testDir: 'tests',
   expect: {
     toHaveScreenshot: {
+      // No pixel tolerance — a tolerance can hide a small defect.
       animations: 'disabled',
       maxDiffPixels: 0,
+      maxDiffPixelRatio: 0,
+      threshold: 0,
     },
   },
   reporter: [
@@ -39,7 +26,7 @@ export default defineConfig({
       './tests/a11y/reporter.ts',
       {
         outputFolder: 'a11y-report',
-        baseline: 'tests/a11y/a11y-baseline.json',
+        baseline: 'a11y-baseline.json',
         title: 'Fernly accessibility',
       },
     ],
@@ -47,39 +34,53 @@ export default defineConfig({
   webServer: [
     {
       command: 'npm run start:api',
-      url: `${apiURL}/api/health`,
+      url: 'http://localhost:8100/api/health',
       reuseExistingServer: !process.env.CI,
     },
     {
       command: 'npm run start:web',
-      url: webURL,
+      url: 'http://localhost:5173',
       reuseExistingServer: !process.env.CI,
     },
   ],
   projects: [
     {
       name: 'setup',
+      testDir: 'tests',
       testMatch: /reset\.setup\.ts/,
-      use: { baseURL: apiURL },
+      use: { baseURL: API_URL },
     },
     {
       name: 'api',
-      testMatch: /api\/.*\.spec\.ts/,
-      use: { baseURL: apiURL },
+      testDir: 'tests/api',
+      use: { baseURL: API_URL },
       dependencies: ['setup'],
     },
     {
       name: 'e2e',
-      testMatch: /e2e\/.*\.spec\.ts/,
-      use: { baseURL: webURL },
+      testDir: 'tests/e2e',
+      use: { baseURL: WEB_URL },
       dependencies: ['setup'],
     },
     {
       name: 'a11y',
-      testMatch: /a11y\/.*\.spec\.ts/,
-      use: { baseURL: webURL },
+      testDir: 'tests/a11y',
+      use: { baseURL: WEB_URL },
       dependencies: ['setup'],
     },
-    ...visualProject,
+    ...(includeVisual
+      ? [
+          {
+            name: 'visual',
+            testDir: 'tests/visual',
+            use: {
+              baseURL: WEB_URL,
+              ...devices['Desktop Chrome'],
+              viewport: { width: 1280, height: 800 },
+            },
+            dependencies: ['setup'],
+          },
+        ]
+      : []),
   ],
 });

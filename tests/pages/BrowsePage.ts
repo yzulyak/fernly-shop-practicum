@@ -1,59 +1,65 @@
 import type { Locator, Page } from '@playwright/test';
 
 export class BrowsePage {
+  readonly page: Page;
   readonly sortBy: Locator;
-  readonly plantsCountHeading: Locator;
-  readonly firstPlantCard: Locator;
-  readonly firstPlantCardHeading: Locator;
-  /** Icon-only save (heart) control — no accessible name; found by role within the card article. */
-  readonly firstPlantCardHeartButton: Locator;
-  readonly searchForm: Locator;
-  readonly searchInput: Locator;
+  readonly plantsHeading: Locator;
+  readonly plantList: Locator;
+  readonly firstPlantHeading: Locator;
+  readonly signOutButton: Locator;
+  readonly cartLink: Locator;
+  readonly nextPageButton: Locator;
 
-  constructor(private readonly page: Page) {
+  constructor(page: Page) {
+    this.page = page;
     this.sortBy = page.getByLabel('Sort by');
-    this.plantsCountHeading = page.getByRole('heading', { level: 2, name: /\d+ plants/ });
-    this.firstPlantCard = page.getByRole('article').first();
-    this.firstPlantCardHeading = this.firstPlantCard.getByRole('heading', { level: 3 });
-    this.firstPlantCardHeartButton = this.firstPlantCard.getByRole('button');
-    this.searchForm = page.getByRole('search');
-    this.searchInput = this.searchForm.getByRole('searchbox');
-  }
-
-  /** Catalog card for a plant by its display name. */
-  plantCardByName(name: string): Locator {
-    return this.page.getByRole('article').filter({
-      has: this.page.getByRole('heading', { level: 3, name }),
+    this.plantsHeading = page.getByRole('heading', { level: 2, name: /\d+ plants/ });
+    this.plantList = page.getByRole('list');
+    this.firstPlantHeading = this.plantList
+      .getByRole('listitem')
+      .first()
+      .getByRole('heading', { level: 3 });
+    this.signOutButton = page.getByRole('button', { name: 'Sign out' });
+    this.cartLink = page.getByRole('link', { name: /Cart/i });
+    this.nextPageButton = page.getByRole('navigation', { name: 'Pages' }).getByRole('button', {
+      name: 'Next',
     });
   }
 
-  /**
-   * Opens the catalog at `/`.
-   * @returns This browse page.
-   */
-  async open(): Promise<BrowsePage> {
+  /** Opens the browse (shop) page. @returns void */
+  async goto(): Promise<void> {
     await this.page.goto('/');
-    return this;
   }
 
   /**
-   * Sets the sort control (e.g. `price-desc`).
-   * @param value Sort option value from the select.
-   * @returns This browse page.
+   * Selects "Price: high to low" in Sort by.
+   * @returns void
    */
-  async selectSort(value: string): Promise<BrowsePage> {
-    await this.sortBy.selectOption(value);
-    return this;
+  async sortPriceHighToLow(): Promise<void> {
+    await this.sortBy.selectOption({ label: 'Price: high to low' });
+  }
+
+  /** Opens the next page of plant results. @returns void */
+  async goToNextPage(): Promise<void> {
+    await this.nextPageButton.click();
   }
 
   /**
-   * Runs a catalog search from the sidebar.
-   * @param query Text to submit in the search form.
-   * @returns This browse page.
+   * Plant card listitem scoped by visible plant name.
+   * @param plantName - Name shown on the card
+   * @returns Locator for that card's listitem
    */
-  async searchPlants(query: string): Promise<BrowsePage> {
-    await this.searchInput.fill(query);
-    await this.searchForm.getByRole('button', { name: 'Search', exact: true }).click();
-    return this;
+  plantCard(plantName: string): Locator {
+    return this.plantList.getByRole('listitem').filter({ hasText: plantName });
+  }
+
+  /**
+   * Heart/save control on a plant card.
+   * F-07: Save (heart) button has no accessible name — find by role inside its card.
+   * @param plantName - Name shown on the card
+   * @returns Locator for the unnamed button inside that card
+   */
+  saveButton(plantName: string): Locator {
+    return this.plantCard(plantName).getByRole('button');
   }
 }

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       reason:
-        description: Why baselines are being refreshed (included in the commit message)
+        description: Why baselines are being regenerated
         required: true
         type: string
 
@@ -31,44 +31,31 @@ jobs:
 
       - run: npx playwright install --with-deps chromium
 
-      - name: Refresh visual snapshots
-        run: npx playwright test --project=visual --update-snapshots=all
-        env:
-          CI: true
+      - run: npx playwright test --project=visual --update-snapshots=all
 
-      - name: Commit baselines when tests/visual changed
-        id: commit
+      - name: Commit and push baseline branch
         env:
-          REASON: ${{ inputs.reason }}
-          RUN_ID: ${{ github.run_id }}
-          BASE_REF: ${{ github.ref_name }}
+          BASELINE_REASON: ${{ inputs.reason }}
         run: |
-          set -euo pipefail
-          if ! git status --porcelain tests/visual | grep -q .; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$(git status --porcelain -- tests/visual)" ]; then
             echo "No changes under tests/visual; nothing to commit." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
+          SOURCE_BRANCH="${{ github.ref_name }}"
+          NEW_BRANCH="visual-baselines/${{ github.run_id }}"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          branch="visual-baselines/${RUN_ID}"
-          git checkout -b "$branch"
+          git checkout -B "$NEW_BRANCH"
           git add tests/visual
-          git commit -m "Visual baselines: ${REASON}"
+          git commit -m "Visual baselines: ${BASELINE_REASON}"
+          git push origin "HEAD:refs/heads/${NEW_BRANCH}"
 
-          git push origin "$branch"
-
-          compare_url="https://github.com/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${branch}"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
-          echo "compare_url=${compare_url}" >> "$GITHUB_OUTPUT"
-
+          COMPARE_URL="${{ github.server_url }}/${{ github.repository }}/compare/${SOURCE_BRANCH}...${NEW_BRANCH}"
           {
-            echo "### Visual baselines branch"
+            echo "### Visual baseline compare"
             echo ""
-            echo "Pushed \`${branch}\` (base: \`${BASE_REF}\`)."
-            echo ""
-            echo "[Open compare view](${compare_url})"
+            echo "[${SOURCE_BRANCH}...${NEW_BRANCH}](${COMPARE_URL})"
           } >> "$GITHUB_STEP_SUMMARY"

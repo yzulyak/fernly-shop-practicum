@@ -2,69 +2,61 @@ import type { Locator, Page } from '@playwright/test';
 import { CheckoutPage } from './CheckoutPage';
 
 export class CartPage {
+  readonly page: Page;
   readonly heading: Locator;
-  readonly emptyHeading: Locator;
+  readonly promoPrompt: Locator;
+  /** F-10: promo code field has no accessible name or visible label — preferred getByLabel for the a11y check. */
+  readonly promoCodeByLabel: Locator;
+  /** F-10: unnamed field — find the promo textbox by role when filling. */
   readonly promoCodeField: Locator;
-  readonly promoCodeLabeledField: Locator;
-  readonly applyPromoButton: Locator;
-  readonly removePromoButton: Locator;
+  readonly applyButton: Locator;
+  readonly removeButton: Locator;
+  readonly leafy10DiscountLine: Locator;
+  readonly leafy10DiscountAmount: Locator;
+  readonly freeshipApplied: Locator;
+  readonly freeShipping: Locator;
+  readonly expiredError: Locator;
   readonly goToCheckoutLink: Locator;
-  readonly promoAlert: Locator;
-  readonly promoCodeLabel: Locator;
 
-  constructor(private readonly page: Page) {
+  constructor(page: Page) {
+    this.page = page;
     this.heading = page.getByRole('heading', { name: 'Your cart' });
-    this.emptyHeading = page.getByRole('heading', { name: 'Your cart is empty' });
-    this.promoCodeField = page.getByRole('main').getByRole('textbox');
-    this.promoCodeLabeledField = page.getByRole('textbox', { name: 'Promo code' });
-    this.applyPromoButton = page.getByRole('button', { name: 'Apply' });
-    this.removePromoButton = page.getByRole('button', { name: 'Remove' });
+    this.promoPrompt = page.getByText('Have a promo code?');
+    this.promoCodeByLabel = page.getByLabel(/promo code/i);
+    this.promoCodeField = page.getByRole('textbox');
+    this.applyButton = page.getByRole('button', { name: 'Apply' });
+    this.removeButton = page.getByRole('button', { name: 'Remove' });
+    this.leafy10DiscountLine = page.getByText(/Discount \(LEAFY10\)/);
+    this.leafy10DiscountAmount = page.getByText('−$3.50');
+    this.freeshipApplied = page.getByText('Code FREESHIP applied');
+    this.freeShipping = page.getByText('Free', { exact: true });
+    this.expiredError = page.getByText(/expir/i);
     this.goToCheckoutLink = page.getByRole('link', { name: 'Go to checkout' });
-    this.promoAlert = page.getByRole('alert');
-    this.promoCodeLabel = page.getByText('Promo code', { exact: true });
   }
 
-  /** Order summary region (default title “Order summary”). */
-  orderSummary(title = 'Order summary'): Locator {
-    return this.page.getByRole('region', { name: title });
-  }
-
-  /** Strong text showing which promo code is applied. */
-  appliedPromoCode(code: string): Locator {
-    return this.page.getByText(code, { exact: true });
-  }
-
-  /**
-   * Opens the signed-in cart.
-   * @returns This cart page.
-   */
-  async open(): Promise<CartPage> {
+  /** Opens the cart page. @returns void */
+  async goto(): Promise<void> {
     await this.page.goto('/cart');
-    return this;
   }
 
   /**
-   * Types a code and clicks Apply (uses the unnamed promo field).
-   * @returns This cart page.
+   * Fills the promo code field and clicks Apply.
+   * @param code - Promo code to apply
+   * @returns void
    */
-  async applyPromoCode(code: string): Promise<CartPage> {
+  async applyPromo(code: string): Promise<void> {
     await this.promoCodeField.fill(code);
-    await this.applyPromoButton.click();
-    return this;
+    await this.applyButton.click();
+  }
+
+  /** Removes the applied promo code. @returns void */
+  async removePromo(): Promise<void> {
+    await this.removeButton.click();
   }
 
   /**
-   * Clicks Remove on an applied code.
-   * @returns This cart page.
-   */
-  async removePromoCode(): Promise<CartPage> {
-    await this.removePromoButton.click();
-    return this;
-  }
-
-  /**
-   * Follows Go to checkout.
-   * @returns The checkout page.
+   * Continues to checkout.
+   * @returns Checkout page
    */
   async goToCheckout(): Promise<CheckoutPage> {
     await this.goToCheckoutLink.click();

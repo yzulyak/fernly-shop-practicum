@@ -9,11 +9,10 @@ import '../../src/styles/global.css';
 registerCypressGrep();
 
 interface FernlyMountOptions extends MountOptions {
-  initialEntries?: MemoryRouterProps['initialEntries'];
+  routerProps?: MemoryRouterProps;
 }
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Cypress {
     interface Chainable {
       /** Mounts a component inside a MemoryRouter and a fresh QueryClientProvider (retries off). */
@@ -23,7 +22,7 @@ declare global {
 }
 
 Cypress.Commands.add('mount', (component: ReactNode, options: FernlyMountOptions = {}) => {
-  const { initialEntries = ['/'], ...mountOptions } = options;
+  const { routerProps, ...mountOptions } = options;
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, refetchOnWindowFocus: false },
@@ -33,7 +32,7 @@ Cypress.Commands.add('mount', (component: ReactNode, options: FernlyMountOptions
 
   return mount(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={initialEntries}>{component}</MemoryRouter>
+      <MemoryRouter {...routerProps}>{component}</MemoryRouter>
     </QueryClientProvider>,
     mountOptions,
   );

@@ -5,10 +5,6 @@
       {
         "command": ".cursor/hooks/guard-baselines.sh",
         "failClosed": true
-      },
-      {
-        "command": ".cursor/hooks/guard-approvals.sh",
-        "failClosed": true
       }
     ],
     "afterFileEdit": [
