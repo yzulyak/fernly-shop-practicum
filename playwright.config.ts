@@ -21,6 +21,7 @@ export default defineConfig({
   reporter: [
     ['list'],
     ['html', { open: 'never' }],
+    ['json', { outputFile: 'reports/playwright.json' }],
     [
       './tests/a11y/reporter.ts',
       {

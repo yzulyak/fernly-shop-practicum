@@ -18,14 +18,14 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run cy:component
+      - run: npm run cy:component -- --reporter junit --reporter-options "mochaFile=cypress/results/component-[hash].xml"
 
       - name: Start shop
         run: npm run start:web &
 
       - run: npx wait-on http://localhost:5173
 
-      - run: npm run cy:ui
+      - run: npm run cy:ui -- --reporter junit --reporter-options "mochaFile=cypress/results/ui-[hash].xml"
 
       - name: Upload Cypress screenshots
         if: ${{ !cancelled() }}
@@ -33,6 +33,14 @@ jobs:
         with:
           name: cypress-screenshots
           path: web/cypress/screenshots
+          if-no-files-found: ignore
+
+      - name: Upload Cypress results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-results
+          path: web/cypress/results
           if-no-files-found: ignore
 
   playwright:
@@ -58,7 +66,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: playwright-report
+          path: |
+            playwright-report
+            reports
           retention-days: 30
 
       - name: Upload a11y report
@@ -68,3 +78,65 @@ jobs:
           name: a11y-report
           path: a11y-report
           retention-days: 30
+
+  report:
+    needs: [cypress, playwright]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: qa-report
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download Playwright report
+        uses: actions/download-artifact@v4
+        with:
+          name: playwright-report
+
+      - name: Download Cypress results
+        uses: actions/download-artifact@v4
+        with:
+          name: cypress-results
+          # upload-artifact@v4 places directory contents at the artifact root
+          path: web/cypress/results
+
+      - name: Download a11y report
+        uses: actions/download-artifact@v4
+        with:
+          name: a11y-report
+          path: a11y-report
+
+
+      - name: Build QA report
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: node scripts/qa-report.mjs build
+
+      - name: Publish QA report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/qa-report.mjs publish
+
+      - name: Upload QA report
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-report
+          path: qa-report
+          retention-days: 90
