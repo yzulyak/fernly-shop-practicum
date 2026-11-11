@@ -62,4 +62,23 @@ export class BrowsePage {
   saveButton(plantName: string): Locator {
     return this.plantCard(plantName).getByRole('button');
   }
+
+  /**
+   * Low-stock badge text on a plant card.
+   * @param plantName - Name shown on the card
+   * @param stock - Remaining count shown in “Only N left”
+   * @returns Locator for that badge text
+   */
+  lowStockBadge(plantName: string, stock: number): Locator {
+    return this.plantCard(plantName).getByText(`Only ${stock} left`);
+  }
+
+  /**
+   * Out of stock ribbon/text on a plant card.
+   * @param plantName - Name shown on the card
+   * @returns Locator for “Out of stock”
+   */
+  outOfStock(plantName: string): Locator {
+    return this.plantCard(plantName).getByText('Out of stock');
+  }
 }

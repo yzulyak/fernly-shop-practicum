@@ -14,6 +14,10 @@ export class PlantPage {
   readonly reviewItems: Locator;
   readonly addToCartButton: Locator;
   readonly cartLink: Locator;
+  readonly notifyEmail: Locator;
+  readonly notifyMeButton: Locator;
+  readonly notifyStatus: Locator;
+  readonly heading: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -29,6 +33,10 @@ export class PlantPage {
     this.reviewItems = this.reviewsRegion.getByRole('listitem');
     this.addToCartButton = page.getByRole('button', { name: 'Add to cart' });
     this.cartLink = page.getByRole('link', { name: /Cart/i });
+    this.notifyEmail = page.getByLabel(/Email me when it's back/i);
+    this.notifyMeButton = page.getByRole('button', { name: 'Notify me' });
+    this.notifyStatus = page.getByRole('status').filter({ hasText: /We'll email/ });
+    this.heading = page.getByRole('heading', { level: 1 });
   }
 
   /**

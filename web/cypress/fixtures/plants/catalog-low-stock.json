@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "id": "pl-pearls",
+      "name": "String of Pearls",
+      "latinName": "Senecio rowleyanus",
+      "price": 16.5,
+      "light": "high",
+      "careLevel": 2,
+      "petSafe": false,
+      "stock": 2,
+      "rating": 4.3,
+      "imageUrl": "/plants/pearls.svg"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 12
+}

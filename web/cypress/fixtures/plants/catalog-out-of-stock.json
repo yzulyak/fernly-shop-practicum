@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "id": "pl-pilea",
+      "name": "Chinese Money Plant",
+      "latinName": "Pilea peperomioides",
+      "price": 19.5,
+      "light": "medium",
+      "careLevel": 1,
+      "petSafe": true,
+      "stock": 0,
+      "rating": 4.5,
+      "imageUrl": "/plants/pilea.svg"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 12
+}

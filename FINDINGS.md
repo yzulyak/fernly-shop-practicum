@@ -170,6 +170,42 @@ Findings are ordered by severity: money and privacy first, then broken flows, th
 - **Contradicts:** docs/features/promo-codes.md — “When a code is refused, the message is announced to screen-reader users as soon as it appears.”
 - **Suggested fix (optional):** Render the error in a `role="alert"` or `aria-live="assertive"` region.
 
+### F-18: Incomplete notify emails (`a@b`, `name@`) are accepted
+
+- **Where:** `POST /api/plants/{plantId}/notify`
+- **Category:** Business rules in the API
+- **Impact:** Customers can sign up with addresses that cannot receive mail; they will never be notified.
+- **Evidence:** tests/api/back-in-stock.spec.ts — incomplete email a@b → 400 validation_error (executed; received 201); incomplete email name@ → 400 validation_error (executed; received 201)
+- **Contradicts:** docs/features/back-in-stock.md — “The email must be a full address like `name@example.com`; `a@b` or `name@` are refused.”
+- **Suggested fix (optional):** Reject incomplete addresses with 400 `validation_error`.
+
+### F-19: Duplicate notify sign-ups are accepted (including case variants)
+
+- **Where:** `POST /api/plants/{plantId}/notify`
+- **Category:** Business rules in the API
+- **Impact:** The same email can be stored more than once for one plant; case variants bypass uniqueness.
+- **Evidence:** tests/api/back-in-stock.spec.ts — first sign-up → 201; same email again → 409 already_subscribed (executed; second POST 201); same address different case → 409 already_subscribed (executed; second POST 201)
+- **Contradicts:** docs/features/back-in-stock.md — “One sign-up per email per plant, ignoring upper and lower case: signing up again is refused with You're already on the list.”
+- **Suggested fix (optional):** Compare emails case-insensitively and return 409 `already_subscribed` with that detail.
+
+### F-20: StockBadge shows “Only 0 left” for out-of-stock
+
+- **Where:** `StockBadge` / Browse plant cards
+- **Category:** Components
+- **Impact:** Out-of-stock cards show a false scarcity badge alongside “Out of stock”.
+- **Evidence:** web/cypress/component/StockBadge.cy.tsx — 6e renders nothing when stock is 0 (executed; renders “Only 0 left”); web/cypress/ui/browse-stock-badge.cy.ts — 8c (executed); tests/e2e/back-in-stock.spec.ts — browse out-of-stock card… never Only 0 left (executed; count 1)
+- **Contradicts:** docs/features/back-in-stock.md — “At 0 the card shows only Out of stock — never Only 0 left.”
+- **Suggested fix (optional):** Render the badge only when stock is 1, 2, or 3.
+
+### F-21: Low-stock badge covers the plant photo (not under the name)
+
+- **Where:** Browse `PlantCard` stock-badge slot / `StockBadge`
+- **Category:** Pages
+- **Impact:** “Only N left” sits on the photo (and near the save control) instead of with the tags under the name.
+- **Evidence:** web/cypress/ui/browse-stock-badge.cy.ts — 8a / 8d (executed; badge top above name; overlaps `<img>`)
+- **Contradicts:** docs/features/back-in-stock.md — “The badge sits with the other tags under the plant's name. It never covers the photo or the save button.”
+- **Suggested fix (optional):** Place the badge in the tag row under the name, not absolutely over the image.
+
 ## Suspicions — not yet tested
 
 Each line is something that looks different from `docs/PRODUCT.md` or the API contract, followed by the line it may contradict. "Seen" means it showed up once during the mapping walk; "Code" means it comes only from reading the source.
