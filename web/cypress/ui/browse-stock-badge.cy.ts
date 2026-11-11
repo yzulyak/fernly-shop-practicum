@@ -6,7 +6,7 @@ function boxesOverlap(
 }
 
 describe('Browse plant-card stock badge', () => {
-  it('8a: low-stock card shows “Only 2 left” with other tags under the name', { tags: '@ui' }, () => {
+  it('8a: low-stock card shows “Only 2 left” with other tags under the name', { tags: ['@ui', '@known-bug'] }, () => {
     cy.intercept('GET', '/api/plants*', { fixture: 'plants/catalog-low-stock.json' }).as('plants');
     cy.visit('/');
     cy.wait('@plants');
@@ -42,7 +42,7 @@ describe('Browse plant-card stock badge', () => {
     });
   });
 
-  it('8c: out-of-stock card shows “Out of stock” and never “Only 0 left”', { tags: '@ui' }, () => {
+  it('8c: out-of-stock card shows “Out of stock” and never “Only 0 left”', { tags: ['@ui', '@known-bug'] }, () => {
     cy.intercept('GET', '/api/plants*', { fixture: 'plants/catalog-out-of-stock.json' }).as('plants');
     cy.visit('/');
     cy.wait('@plants');
@@ -53,7 +53,7 @@ describe('Browse plant-card stock badge', () => {
     });
   });
 
-  it('8d: “Only N left” does not cover the plant photo or the save button', { tags: '@ui' }, () => {
+  it('8d: “Only N left” does not cover the plant photo or the save button', { tags: ['@ui', '@known-bug'] }, () => {
     cy.intercept('GET', '/api/plants*', { fixture: 'plants/catalog-low-stock.json' }).as('plants');
     cy.visit('/');
     cy.wait('@plants');

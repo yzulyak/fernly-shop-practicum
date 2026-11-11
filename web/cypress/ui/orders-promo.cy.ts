@@ -80,7 +80,7 @@ function waitForShell() {
 }
 
 describe('Orders promo', () => {
-  it('U3-01 shows Paid with Discount (LEAFY10), −$1.25, and total $18.20', { tags: '@ui' }, () => {
+  it('U3-01 shows Paid with Discount (LEAFY10), −$1.25, and total $18.20', { tags: ['@ui', '@known-bug'] }, () => {
     stubSignedIn();
     cy.intercept('GET', '/api/orders/ord-leafy', { fixture: 'promo/order-leafy10.json' }).as('order');
     visitSignedIn('/orders/ord-leafy');
@@ -95,7 +95,7 @@ describe('Orders promo', () => {
     });
   });
 
-  it('U3-02 shows that order’s total as $18.20', { tags: '@ui' }, () => {
+  it('U3-02 shows that order’s total as $18.20', { tags: ['@ui', '@known-bug'] }, () => {
     stubSignedIn();
     cy.intercept('GET', /\/api\/orders$/, { fixture: 'promo/orders-leafy10.json' }).as('orders');
     visitSignedIn('/orders');

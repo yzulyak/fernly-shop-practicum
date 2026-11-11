@@ -59,7 +59,7 @@ describe('Cart page', () => {
     cy.findByRole('link', { name: 'Go to checkout' });
   });
 
-  it('CP-02 shows free shipping when subtotal is at least fifty dollars', { tags: '@ui' }, () => {
+  it('CP-02 shows free shipping when subtotal is at least fifty dollars', { tags: ['@ui', '@known-bug'] }, () => {
     openCart('cart/free-shipping.json');
 
     cy.findByRole('heading', { name: 'Order summary' }).parent().within(() => {
@@ -69,7 +69,7 @@ describe('Cart page', () => {
     });
   });
 
-  it('CP-03 shows how much more is needed for free shipping', { tags: '@ui' }, () => {
+  it('CP-03 shows how much more is needed for free shipping', { tags: ['@ui', '@known-bug'] }, () => {
     openCart('cart/below-free-shipping-hint.json');
 
     cy.findByText('Add $10.00 more for free shipping.');
@@ -89,7 +89,7 @@ describe('Cart page', () => {
     });
   });
 
-  it('CP-05 shows $0.00 for a zero-priced line', { tags: '@ui' }, () => {
+  it('CP-05 shows $0.00 for a zero-priced line', { tags: ['@ui', '@known-bug'] }, () => {
     openCart('cart/zero-price-line.json');
 
     cy.findByRole('listitem').within(() => {
@@ -155,7 +155,7 @@ describe('Cart page', () => {
     cy.findByText('$31.95');
   });
 
-  it('CP-10 disables Increase quantity at the stock limit', { tags: '@ui' }, () => {
+  it('CP-10 disables Increase quantity at the stock limit', { tags: ['@ui', '@known-bug'] }, () => {
     openCart('cart/at-stock-limit.json');
 
     cy.findByRole('button', { name: 'Increase quantity' }).then(($el) =>
@@ -200,7 +200,10 @@ describe('Cart page', () => {
     cy.wait('@patchLine');
   });
 
-  it('CP-13 shows an error toast when PATCH is rejected and keeps the quantity', { tags: '@ui' }, () => {
+  // Question — PRODUCT.md / docs/features do not require a toast for rejected cart PATCH.
+  // APP-MAP.md CartPage says "Change failed: an error Toast shows the API's detail"; hand check: no toast after PATCH 400.
+  // See FINDINGS.md → Questions (CartPage test-design CP-13).
+  it.skip('CP-13 shows an error toast when PATCH is rejected and keeps the quantity', { tags: '@ui' }, () => {
     openCart('cart/one-line-qty-one.json');
 
     cy.intercept('PATCH', '/api/cart/lines/ln-patch-1', {

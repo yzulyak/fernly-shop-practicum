@@ -28,6 +28,7 @@ test('browse card with stock > 3 has no Only N left badge', { tag: '@e2e' }, asy
 test('browse out-of-stock card shows Out of stock never Only 0 left', { tag: '@e2e' }, async ({
   page,
 }) => {
+  test.fail(true, 'F-20: StockBadge shows “Only 0 left” for out-of-stock');
   const browse = new BrowsePage(page);
   await browse.goto();
   // Chinese Money Plant may be past first page — search or paginate via URL/query if needed

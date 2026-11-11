@@ -76,7 +76,7 @@ function openCheckout(cartFixture: string) {
 }
 
 describe('Checkout promo', () => {
-  it('U2-01 shows Discount (LEAFY10), −$1.25, shipping $6.95, and total $18.20', { tags: '@ui' }, () => {
+  it('U2-01 shows Discount (LEAFY10), −$1.25, shipping $6.95, and total $18.20', { tags: ['@ui', '@known-bug'] }, () => {
     openCheckout('promo/cart-pothos-leafy10.json');
 
     cy.findByRole('region', { name: 'Order summary' }).within(() => {
@@ -120,7 +120,7 @@ describe('Checkout promo', () => {
     cy.findByRole('button', { name: 'Try again' });
   });
 
-  it('U2-05 shows Free shipping, no Discount, and total $12.50', { tags: '@ui' }, () => {
+  it('U2-05 shows Free shipping, no Discount, and total $12.50', { tags: ['@ui', '@known-bug'] }, () => {
     openCheckout('promo/cart-pothos-freeship.json');
 
     cy.findByRole('region', { name: 'Order summary' }).within(() => {

@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { formatBlockingViolations } from './baseline.js';
+import { formatBlockingMessage } from './baseline';
 import { scanPage } from './helpers/scan.js';
 
 /**
@@ -51,13 +51,14 @@ async function addPothos(request: APIRequestContext, auth: { Authorization: stri
 }
 
 test('X1 cart with a line and an empty promo field has no new blocking violations', { tag: '@a11y' }, async ({ page, request }, testInfo) => {
+  test.fail(true, 'F-10: promo code field has no accessible name or visible label');
   const customer = await register(request);
   await addPothos(request, customer);
   await openWithToken(page, customer.token, '/cart');
   await expect(page.getByRole('heading', { name: 'Your cart' })).toBeVisible();
 
   const { blocking } = await scanPage(page, testInfo, { name: 'Cart' });
-  expect.soft(blocking, formatBlockingViolations(blocking)).toHaveLength(0);
+  expect.soft(blocking, formatBlockingMessage(blocking)).toHaveLength(0);
   await expect(page.getByRole('textbox', { name: 'Promo code' }), 'promo field accessible name').toBeVisible();
 });
 
@@ -75,10 +76,11 @@ test('X1 cart with LEAFY10 applied has no new blocking violations', { tag: '@a11
   await expect(page.getByRole('button', { name: 'Remove', exact: true })).toBeVisible();
 
   const { blocking } = await scanPage(page, testInfo, { name: 'Cart' });
-  expect(blocking, formatBlockingViolations(blocking)).toHaveLength(0);
+  expect(blocking, formatBlockingMessage(blocking)).toHaveLength(0);
 });
 
 test('X1 checkout of a discounted cart has no new blocking violations', { tag: '@a11y' }, async ({ page, request }, testInfo) => {
+  test.fail(true, 'F-08: PriceTag contrast fails on checkout summary');
   const customer = await register(request);
   await addPothos(request, customer);
   const applied = await request.post('/api/cart/promo', {
@@ -92,10 +94,11 @@ test('X1 checkout of a discounted cart has no new blocking violations', { tag: '
   await expect(page.getByText(/Discount/)).toBeVisible();
 
   const { blocking } = await scanPage(page, testInfo, { name: 'Checkout' });
-  expect(blocking, formatBlockingViolations(blocking)).toHaveLength(0);
+  expect(blocking, formatBlockingMessage(blocking)).toHaveLength(0);
 });
 
 test('X1 a paid order with a discount line has no new blocking violations', { tag: '@a11y' }, async ({ page, request }, testInfo) => {
+  test.fail(true, 'F-08: PriceTag contrast fails on order Paid summary');
   const customer = await register(request);
   await addPothos(request, customer);
   const applied = await request.post('/api/cart/promo', {
@@ -115,10 +118,11 @@ test('X1 a paid order with a discount line has no new blocking violations', { ta
   await expect(page.getByText(/Discount/)).toBeVisible();
 
   const { blocking } = await scanPage(page, testInfo, { name: 'Order' });
-  expect(blocking, formatBlockingViolations(blocking)).toHaveLength(0);
+  expect(blocking, formatBlockingMessage(blocking)).toHaveLength(0);
 });
 
 test('X1 an expired-code refusal is in an alert and the cart has no new blocking violations', { tag: '@a11y' }, async ({ page, request }, testInfo) => {
+  test.fail(true, 'F-17: refused promo message is not announced to assistive tech');
   const customer = await register(request);
   await addPothos(request, customer);
   await openWithToken(page, customer.token, '/cart');
@@ -131,5 +135,5 @@ test('X1 an expired-code refusal is in an alert and the cart has no new blocking
   await expect(announced, 'expired refusal is announced immediately').toBeVisible();
 
   const { blocking } = await scanPage(page, testInfo, { name: 'Cart' });
-  expect.soft(blocking, formatBlockingViolations(blocking)).toHaveLength(0);
+  expect.soft(blocking, formatBlockingMessage(blocking)).toHaveLength(0);
 });

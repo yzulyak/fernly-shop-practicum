@@ -88,6 +88,7 @@ test('full address name@example.com → 201', { tag: '@api' }, async ({ request 
 });
 
 test('incomplete email a@b → 400 validation_error', { tag: '@api' }, async ({ request }) => {
+  test.fail(true, 'F-18: incomplete notify emails (a@b, name@) are accepted');
   const { status, body } = await notify(request, OOS_PLANT, 'a@b');
   expect(status).toBe(400);
   expect(body.rule).toBe('validation_error');
@@ -95,6 +96,7 @@ test('incomplete email a@b → 400 validation_error', { tag: '@api' }, async ({ 
 });
 
 test('incomplete email name@ → 400 validation_error', { tag: '@api' }, async ({ request }) => {
+  test.fail(true, 'F-18: incomplete notify emails (a@b, name@) are accepted');
   const { status, body } = await notify(request, OOS_PLANT, 'name@');
   expect(status).toBe(400);
   expect(body.rule).toBe('validation_error');
@@ -129,6 +131,7 @@ test('missing email → 400 validation_error', { tag: '@api' }, async ({ request
 test('first sign-up → 201; same email again → 409 already_subscribed', { tag: '@api' }, async ({
   request,
 }) => {
+  test.fail(true, 'F-19: duplicate notify sign-ups are accepted (including case variants)');
   const email = uniqueEmail('dup');
   const first = await notify(request, OOS_PLANT, email);
   expect(first.status).toBe(201);
@@ -142,6 +145,7 @@ test('first sign-up → 201; same email again → 409 already_subscribed', { tag
 });
 
 test('same address different case → 409 already_subscribed', { tag: '@api' }, async ({ request }) => {
+  test.fail(true, 'F-19: duplicate notify sign-ups are accepted (including case variants)');
   const local = `ava-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const first = await notify(request, OOS_PLANT, `${local}@example.com`);
   expect(first.status).toBe(201);
