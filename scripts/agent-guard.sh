@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
 # agent-guard.sh — reject agent patches that touch forbidden paths or files outside allowed globs.
 # Bash 3.2 compatible.
+# Usage: agent-guard.sh <patch> <allowed pattern>...
 set -euo pipefail
 
 usage() {
   echo "usage: agent-guard.sh <patch> <allowed pattern>..." >&2
 }
 
-if [ $# -lt 1 ]; then
+if [ $# -lt 2 ]; then
   usage
   exit 1
 fi
 
 PATCH="$1"
 shift
-
-if [ $# -eq 0 ]; then
-  usage
-  exit 1
-fi
 
 if [ ! -f "$PATCH" ]; then
   echo "agent-guard: patch file not found: $PATCH" >&2
@@ -46,10 +42,10 @@ DISALLOWED=()
 is_person_only() {
   local f="$1"
   case "$f" in
-    web/src/*|api/src/*|.github/*|.cursor/*|scripts/*)
+    web/src|web/src/*|api/src|api/src/*|.github|.github/*|.cursor|.cursor/*|scripts|scripts/*)
       return 0
       ;;
-    */package.json|package.json|*/package-lock.json|package-lock.json)
+    package.json|*/package.json|package-lock.json|*/package-lock.json)
       return 0
       ;;
     playwright.config.ts|*/playwright.config.ts)
@@ -61,16 +57,26 @@ is_person_only() {
     a11y-baseline.json|*/a11y-baseline.json)
       return 0
       ;;
-    *-snapshots/*|*/-*-snapshots/*)
-      return 0
-      ;;
-    */cypress/screenshots/*|*/cypress/results/*)
-      return 0
-      ;;
     .env|.env.*|*/.env|*/.env.*)
       return 0
       ;;
   esac
+
+  case "$f" in
+    *-snapshots|*-snapshots/*)
+      return 0
+      ;;
+  esac
+
+  case "$f" in
+    cypress/screenshots|cypress/screenshots/*|*/cypress/screenshots|*/cypress/screenshots/*)
+      return 0
+      ;;
+    cypress/results|cypress/results/*|*/cypress/results|*/cypress/results/*)
+      return 0
+      ;;
+  esac
+
   return 1
 }
 
@@ -78,7 +84,7 @@ is_person_only() {
 path_allowed() {
   local f="$1"
   shift
-  local pat
+  local pat prefix
   for pat in "$@"; do
     case "$f" in
       $pat)
@@ -88,7 +94,7 @@ path_allowed() {
     case "$pat" in
       */*)
         if [ "${pat##*/}" = "*" ]; then
-          local prefix="${pat%/*}/"
+          prefix="${pat%/*}/"
           case "$f" in
             ${prefix}*)
               return 0
@@ -101,22 +107,24 @@ path_allowed() {
   return 1
 }
 
-while IFS= read -r line; do
+# Read numstat lines without a nested EOF that would truncate this file when embedded in heredocs.
+while IFS= read -r line || [ -n "$line" ]; do
   [ -z "$line" ] && continue
-  # numstat: added\tremoved\tpath (path may contain spaces — last field)
-  path="${line##*$'\t'}"
+  # numstat: added\tremoved\tpath (path may contain spaces — fields after the second tab)
+  path="${line#*$'\t'}"
+  path="${path#*$'\t'}"
 
   if is_person_only "$path"; then
-    FORBIDDEN+=("$path")
+    FORBIDDEN[${#FORBIDDEN[@]}]="$path"
     continue
   fi
 
   if ! path_allowed "$path" "$@"; then
-    DISALLOWED+=("$path")
+    DISALLOWED[${#DISALLOWED[@]}]="$path"
   fi
-done <<EOF
+done <<NUMSTAT_END
 $NUMSTAT
-EOF
+NUMSTAT_END
 
 err=0
 if [ ${#FORBIDDEN[@]} -gt 0 ]; then
