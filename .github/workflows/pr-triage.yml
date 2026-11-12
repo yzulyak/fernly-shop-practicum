@@ -1,0 +1,113 @@
+name: PR triage
+
+on:
+  pull_request:
+    types: [opened, synchronize, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-triage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    if: github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Merge base branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "${{ github.base_ref }}"
+          git merge --no-edit "origin/${{ github.base_ref }}"
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run change-triage (plan)
+        run: |
+          agent -p --force --trust --output-format text "Use the change-triage subagent on this pull request. The diff is git diff origin/${{ github.base_ref }}...HEAD. Write the plan to docs/test-plans/${{ github.head_ref }}.md and print only the plan." > plan.md
+
+      - name: Commit plan and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "docs/test-plans/${{ github.head_ref }}.md"
+          if git diff --cached --quiet; then
+            echo "No plan file to commit"
+          else
+            git commit -m "Add test plan for ${{ github.head_ref }}"
+            git push origin "HEAD:${{ github.head_ref }}"
+          fi
+
+      - name: Comment plan on PR
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file plan.md
+
+  tests:
+    if: github.event.action == 'labeled' && github.event.label.name == 'plan-approved'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Merge base branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "${{ github.base_ref }}"
+          git merge --no-edit "origin/${{ github.base_ref }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run change-triage (tests)
+        run: |
+          agent -p --force --trust --output-format text "The plan is approved. Route each row to its specialist, write the tests, run them, and write the results file. Never change app code." > results.md
+
+      - name: Commit tests and docs, then push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/test-plans FINDINGS.md tests web/cypress || true
+          if git diff --cached --quiet; then
+            echo "No test or docs changes to commit"
+          else
+            git commit -m "Add tests and results for ${{ github.head_ref }}"
+            git push origin "HEAD:${{ github.head_ref }}"
+          fi
+
+      - name: Comment results on PR
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file results.md
