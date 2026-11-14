@@ -1,0 +1,61 @@
+name: Visual baselines
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Why baselines are being regenerated
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: visual-baselines-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: npx playwright test --project=visual --update-snapshots=all
+
+      - name: Commit and push baseline branch
+        env:
+          BASELINE_REASON: ${{ inputs.reason }}
+        run: |
+          if [ -z "$(git status --porcelain -- tests/visual)" ]; then
+            echo "No changes under tests/visual; nothing to commit." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          SOURCE_BRANCH="${{ github.ref_name }}"
+          NEW_BRANCH="visual-baselines/${{ github.run_id }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "$NEW_BRANCH"
+          git add tests/visual
+          git commit -m "Visual baselines: ${BASELINE_REASON}"
+          git push origin "HEAD:refs/heads/${NEW_BRANCH}"
+
+          COMPARE_URL="${{ github.server_url }}/${{ github.repository }}/compare/${SOURCE_BRANCH}...${NEW_BRANCH}"
+          {
+            echo "### Visual baseline compare"
+            echo ""
+            echo "[${SOURCE_BRANCH}...${NEW_BRANCH}](${COMPARE_URL})"
+          } >> "$GITHUB_STEP_SUMMARY"
