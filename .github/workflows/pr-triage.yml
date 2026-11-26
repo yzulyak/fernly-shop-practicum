@@ -93,6 +93,8 @@ jobs:
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - uses: grafana/setup-k6-action@v1
+
       - name: Run change-triage (tests)
         run: |
           agent -p --force --trust --output-format text "The plan is approved. Route each row to its specialist, write the tests, run them, and write the results file. Never change app code." > results.md
