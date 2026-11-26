@@ -1,0 +1,57 @@
+{
+  "days": 30,
+  "items": [
+    {
+      "id": "pl-snake",
+      "name": "Snake Plant",
+      "latinName": "Dracaena trifasciata",
+      "price": 22.0,
+      "light": "low",
+      "careLevel": 1,
+      "petSafe": false,
+      "stock": 20,
+      "rating": 4.8,
+      "imageUrl": "/plants/snake.svg",
+      "unitsSold": 128
+    },
+    {
+      "id": "pl-pothos",
+      "name": "Golden Pothos",
+      "latinName": "Epipremnum aureum",
+      "price": 18.5,
+      "light": "low",
+      "careLevel": 1,
+      "petSafe": false,
+      "stock": 30,
+      "rating": 4.6,
+      "imageUrl": "/plants/pothos.svg",
+      "unitsSold": 96
+    },
+    {
+      "id": "pl-zz",
+      "name": "ZZ Plant",
+      "latinName": "Zamioculcas zamiifolia",
+      "price": 28.0,
+      "light": "low",
+      "careLevel": 1,
+      "petSafe": false,
+      "stock": 15,
+      "rating": 4.5,
+      "imageUrl": "/plants/zz.svg",
+      "unitsSold": 72
+    },
+    {
+      "id": "pl-fiddle",
+      "name": "Fiddle Leaf Fig",
+      "latinName": "Ficus lyrata",
+      "price": 48.0,
+      "light": "bright",
+      "careLevel": 3,
+      "petSafe": false,
+      "stock": 8,
+      "rating": 4.2,
+      "imageUrl": "/plants/fiddle.svg",
+      "unitsSold": 54
+    }
+  ]
+}

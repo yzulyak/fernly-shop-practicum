@@ -1,0 +1,70 @@
+{
+  "days": 30,
+  "items": [
+    {
+      "id": "pl-monstera",
+      "name": "Monstera Deliciosa",
+      "latinName": "Monstera deliciosa",
+      "price": 34.99,
+      "light": "medium",
+      "careLevel": 1,
+      "petSafe": false,
+      "stock": 12,
+      "rating": 4.7,
+      "imageUrl": "/plants/monstera.svg",
+      "unitsSold": 140
+    },
+    {
+      "id": "pl-snake",
+      "name": "Snake Plant",
+      "latinName": "Dracaena trifasciata",
+      "price": 22.0,
+      "light": "low",
+      "careLevel": 1,
+      "petSafe": false,
+      "stock": 20,
+      "rating": 4.8,
+      "imageUrl": "/plants/snake.svg",
+      "unitsSold": 128
+    },
+    {
+      "id": "pl-pothos",
+      "name": "Golden Pothos",
+      "latinName": "Epipremnum aureum",
+      "price": 18.5,
+      "light": "low",
+      "careLevel": 1,
+      "petSafe": false,
+      "stock": 30,
+      "rating": 4.6,
+      "imageUrl": "/plants/pothos.svg",
+      "unitsSold": 96
+    },
+    {
+      "id": "pl-zz",
+      "name": "ZZ Plant",
+      "latinName": "Zamioculcas zamiifolia",
+      "price": 28.0,
+      "light": "low",
+      "careLevel": 1,
+      "petSafe": false,
+      "stock": 15,
+      "rating": 4.5,
+      "imageUrl": "/plants/zz.svg",
+      "unitsSold": 72
+    },
+    {
+      "id": "pl-calathea",
+      "name": "Calathea Orbifolia",
+      "latinName": "Goeppertia orbifolia",
+      "price": 32.0,
+      "light": "medium",
+      "careLevel": 2,
+      "petSafe": true,
+      "stock": 10,
+      "rating": 4.4,
+      "imageUrl": "/plants/calathea.svg",
+      "unitsSold": 40
+    }
+  ]
+}
