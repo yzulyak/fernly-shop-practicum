@@ -12,18 +12,17 @@ Sources: `docs/features/popular-plants.md`, OpenAPI registration in `api/src/fea
 | 4 | Plant page Popular slot | Slot fetches `/popular?limit=5`, passes `currentId` | List missing, shows current plant, or wrong count on the plant page | Cypress UI (mocked API) | cypress-test-writer | **positive:** mocked popular payload → “Popular right now” with up to four other plants and sold copy. **edge:** when current plant is in the mocked top set, it is absent and another plant can fill the fourth slot (limit 5 → four after exclude). **negative:** no data / pending → section not shown (null). | popular-plants.md: “Every plant page… four plants… The plant on screen is left out of its own page's list.” |
 | 5 | Plant page popular flow | End-to-end against real API | Ranking/UI disagree; current plant still listed | Playwright e2e | — | **positive:** open a plant page → Popular section lists plants (≠ current) with “sold this month”; order matches `GET /api/popular` after excluding current. **edge:** open the #1 popular plant’s page → that plant is absent; still up to four others. **negative:** follow a popular link → lands on that plant’s page (URL `/plants/:id`). | popular-plants.md: full “How it should behave” list bullets |
 | 6 | Plant page accessibility | New Popular section on `/plants/:plantId` | Popular block fails axe / keyboard / names | axe scan (`tests/a11y`) | — | **accessibility:** scan plant page with Popular visible; heading/name association; list links keyboard-reachable and named; sold text contrast. | popular-plants.md: section on plant page; PRODUCT.md WCAG 2.1 AA |
-| 7 | Load: popular + catalog at busy hour | Doc SLO under ~20 concurrent shoppers | Slow or failing popular/catalog under browse load | Playwright API (load) | — | **positive:** ~20 concurrent `GET /api/popular` → **no failures**; **95% ≤ 300 ms**. **edge / regression:** same concurrency on `GET /api/plants` → **95% ≤ 300 ms**. | popular-plants.md: “How fast it must be” (20 shoppers; 95% of popular within 300 ms, no failures; catalog still 95% within 300 ms) |
+| 7 | Load: popular + catalog at busy hour | Doc SLO under ~20 concurrent shoppers | Slow or failing popular/catalog under browse load | k6 load test | performance-test-design | **positive:** ~20 VUs hitting `GET /api/popular` → **no failures**; **p95 ≤ 300 ms**. **edge / regression:** same load also hits `GET /api/plants` → **p95 ≤ 300 ms**. Script follows `tests/performance/catalog.js` (smoke then load); do not raise limits to pass. | popular-plants.md: “How fast it must be” (20 shoppers; 95% of popular within 300 ms, no failures; catalog still 95% within 300 ms) |
 
 ## Notes
 
 - No money, privacy, or sign-in surface in this change; customer-facing ranking correctness (IDs 1–2) comes first.
 - CSS-only (`PopularList.module.css`) and `docs/features/popular-plants.md` have no separate test rows.
 - Assert documented behavior even if implementation differs (units vs orders, out-of-stock exclusion, SLO); failures are findings, not softened expectations.
-- Load harness details (exact tool, warm-up, sample size for p95) are **assumed — ask** if the repo has no existing load pattern for this SLO.
+- Row 7 uses k6 per `performance-test-design` and the feature doc's "How fast it must be" targets.
 
 ### Assumed — ask
 
 | Topic | Why |
 | --- | --- |
-| Load-test harness | Feature doc requires p95 ≤ 300 ms at ~20 concurrent shoppers; confirm preferred runner (Playwright parallel requests vs external tool) and sample size before implementing row 7. |
 | Stable expected top-N identities | Sales history is seeded/deterministic at API start — confirm whether tests may hard-assert specific plant IDs/order, or only relative ordering and schema. |
