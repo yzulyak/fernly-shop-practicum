@@ -15,6 +15,8 @@
     "build": "npm run build -w web",
     "typecheck": "npm run typecheck -w api && npm run typecheck -w web",
     "smoke": "node scripts/smoke.mjs",
+    "perf:smoke": "mkdir -p reports/k6 && k6 run --env SCENARIO=smoke tests/performance/catalog.js",
+    "perf:load": "mkdir -p reports/k6 && k6 run --env SCENARIO=load tests/performance/catalog.js",
     "cy:component": "cypress run --component --project web --expose grepTags=-@known-bug",
     "cy:ui": "cypress run --e2e --project web --expose grepTags=-@known-bug",
     "cy:open": "cypress open --project web",
