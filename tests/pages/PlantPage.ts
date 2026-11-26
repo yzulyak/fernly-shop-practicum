@@ -14,6 +14,9 @@ export class PlantPage {
   readonly reviewItems: Locator;
   readonly addToCartButton: Locator;
   readonly cartLink: Locator;
+  readonly popularHeading: Locator;
+  readonly popularRegion: Locator;
+  readonly popularItems: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -29,6 +32,9 @@ export class PlantPage {
     this.reviewItems = this.reviewsRegion.getByRole('listitem');
     this.addToCartButton = page.getByRole('button', { name: 'Add to cart' });
     this.cartLink = page.getByRole('link', { name: /Cart/i });
+    this.popularHeading = page.getByRole('heading', { level: 2, name: 'Popular right now' });
+    this.popularRegion = page.getByRole('region', { name: 'Popular right now' });
+    this.popularItems = this.popularRegion.getByRole('listitem');
   }
 
   /**
@@ -87,5 +93,14 @@ export class PlantPage {
    */
   starRadio(stars: number): Locator {
     return this.page.getByRole('radio', { name: `${stars} stars` });
+  }
+
+  /**
+   * Popular list link for a plant name.
+   * @param plantName - Visible plant name in the popular list
+   * @returns Locator for that link
+   */
+  popularLink(plantName: string): Locator {
+    return this.popularRegion.getByRole('link', { name: plantName });
   }
 }

@@ -170,13 +170,49 @@ Findings are ordered by severity: money and privacy first, then broken flows, th
 - **Contradicts:** docs/features/promo-codes.md — “When a code is refused, the message is announced to screen-reader users as soon as it appears.”
 - **Suggested fix (optional):** Render the error in a `role="alert"` or `aria-live="assertive"` region.
 
+### F-18: Popular ranks by order count, not units sold
+
+- **Where:** `GET /api/popular`
+- **Category:** Business rules in the API
+- **Impact:** Workshop bulk buys (e.g. 40 cuttings in one order) barely move the ranking, so shoppers see the wrong “popular” plants.
+- **Evidence:** tests/api/popular-plants.spec.ts — workshop bulk cuttings rank by units sold, not order count (executed; Succulent Cutting absent from top 12; Monstera leads at ~1762 while Cutting with ~200×40 workshop sales does not appear)
+- **Contradicts:** docs/features/popular-plants.md — “Popularity is counted in units sold, not orders: a workshop that buys 40 cuttings in one order counts as 40.”
+- **Suggested fix (optional):** Add `sale.quantity` (not `1`) when accumulating `unitsSold`.
+
+### F-19: Out-of-stock Chinese Money Plant appears in popular
+
+- **Where:** `GET /api/popular`
+- **Category:** Business rules in the API
+- **Impact:** Shoppers are sent to a plant they cannot buy (stock 0).
+- **Evidence:** tests/api/popular-plants.spec.ts — out-of-stock plants are left out of popular (executed; `pl-pilea` Chinese Money Plant returned with `stock: 0`, often #2)
+- **Contradicts:** docs/features/popular-plants.md — “Plants that are out of stock are left out.”
+- **Suggested fix (optional):** Exclude plants with `stock === 0` before returning the list.
+
+### F-20: Popular and catalog miss p95 ≤ 300 ms at 20 concurrent shoppers
+
+- **Where:** `GET /api/popular`, `GET /api/plants` under browse load
+- **Category:** Business rules in the API
+- **Impact:** At busy-hour concurrency the popular list and catalog feel slow even though requests succeed.
+- **Evidence:** tests/performance/popular-plants.js — `PROFILE=load` (20 VUs, 45s) (executed). Targets: popular p95 ≤ 300 ms, catalog p95 ≤ 300 ms, no failures. Measured: **popular p95 = 2.05 s**, **catalog p95 = 1.72 s**, **popular_failures = 0%**, **catalog_failures = 0%**, **http_req_failed = 0%** (378 iterations, 756 requests). Smoke (1 VU) passed (popular ~135 ms).
+- **Contradicts:** docs/features/popular-plants.md — “At that load, 95% of GET /api/popular answers come back within 300 ms, and no request fails… 95% of catalog requests (GET /api/plants) still come back within 300 ms.”
+- **Suggested fix (optional):** Pre-aggregate units sold (and cache) instead of scanning the full sales history per request.
+
+### F-21: Popular link updates URL but plant page stays on the previous plant
+
+- **Where:** Plant page Popular list links (`PopularList` → `/plants/:id`)
+- **Category:** Pages
+- **Impact:** After clicking a popular plant, the address bar changes but the customer still sees the previous plant (wrong Add to cart target).
+- **Evidence:** tests/e2e/popular-plants.spec.ts — following a popular link lands on that plant page (executed; URL `/plants/pl-monstera` while h1 remained “Snake Plant”). Same root cause as the “Likes the same light” suspicion (plant query key without id).
+- **Contradicts:** docs/features/popular-plants.md — popular links should take the shopper to that plant; docs/PRODUCT.md / APP-MAP — plant page shows the plant in the address bar after in-app navigation.
+- **Suggested fix (optional):** Include `plantId` in the plant query key so navigation refetches.
+
 ## Suspicions — not yet tested
 
 Each line is something that looks different from `docs/PRODUCT.md` or the API contract, followed by the line it may contradict. "Seen" means it showed up once during the mapping walk; "Code" means it comes only from reading the source.
 
 - Prices render without two decimals for non-zero amounts (`$22`, `$27.5`, `$12.5`, "Add $37.5 more for free shipping"); `formatPrice` rounds but never pads (seen). Related to F-02. — "Every price is shown in dollars with **two decimals**, everywhere."
 - Care level 3 plants (Fiddle Leaf Fig, Calathea, String of Pearls) show "●●● Moderate care"; `CareLevelBadge` caps the label index at 2 (seen). — "Care level has three steps: 1 Easy, 2 Moderate, 3 Expert."
-- After clicking "Calathea Orbifolia" under "Likes the same light" on Monstera, the address bar shows `/plants/pl-calathea` but the page still shows Monstera Deliciosa; the plant query key `['plant']` has no plant id, so Add to cart would add the wrong plant (seen once). — "The plant page always shows the plant in the address bar, including after following a 'Likes the same light' link."
+- After clicking "Calathea Orbifolia" under "Likes the same light" on Monstera, the address bar shows `/plants/pl-calathea` but the page still shows Monstera Deliciosa; the plant query key `['plant']` has no plant id, so Add to cart would add the wrong plant (seen once). Related confirmed finding: **F-21** (Popular links). — "The plant page always shows the plant in the address bar, including after following a 'Likes the same light' link."
 - Cached single orders (query key `['order', id]`) and plant data aren't cleared at sign-out; only `cart` and `orders` are, so the next customer on the same device may see the previous customer's order from cache (code). — "An order is private: only the customer who placed it can see it." and "Signing out forgets the session on this device."
 - The search field has no accessible name: the snapshot shows an unnamed `searchbox`, and "Search plants" is a `<span>` hint, not a label (seen). — "every button and form field has a name a screen reader can announce."
 

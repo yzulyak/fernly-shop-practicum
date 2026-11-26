@@ -57,6 +57,37 @@ test('Plant has no blocking a11y violations', { tag: '@a11y' }, async ({ page },
   expect(blocking, formatBlockingMessage(blocking)).toEqual([]);
 });
 
+test('Plant Popular section is named, keyboard-reachable, and axe-clean for new content', { tag: '@a11y' }, async ({
+  page,
+}, testInfo) => {
+  test.fail(true, 'F-08: PriceTag contrast fails; F-09: plant hero image has no alt');
+  await page.goto('/plants/pl-monstera');
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+
+  const popularHeading = page.getByRole('heading', { level: 2, name: 'Popular right now' });
+  const popularRegion = page.getByRole('region', { name: 'Popular right now' });
+  await expect(popularHeading).toBeVisible();
+  await expect(popularRegion).toBeVisible();
+
+  const links = popularRegion.getByRole('link');
+  await expect(links.first()).toBeVisible();
+  const count = await links.count();
+  expect(count).toBeGreaterThan(0);
+  expect(count).toBeLessThanOrEqual(4);
+
+  await links.first().focus();
+  await expect(links.first()).toBeFocused();
+  for (let i = 0; i < count; i += 1) {
+    const name = await links.nth(i).innerText();
+    expect(name.trim().length, `popular link ${i} must be named`).toBeGreaterThan(0);
+  }
+
+  await expect(popularRegion.getByText(/sold this month/)).toBeVisible();
+
+  const { blocking } = await scanPage(page, testInfo, { name: 'Plant Popular' });
+  expect(blocking, formatBlockingMessage(blocking)).toEqual([]);
+});
+
 test('Plant Reviews (signed-out) keeps Reviews landmark and heading', { tag: '@a11y' }, async ({
   page,
 }, testInfo) => {
